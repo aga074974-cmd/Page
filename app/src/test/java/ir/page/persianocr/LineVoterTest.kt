@@ -181,8 +181,9 @@ class LineVoterTest {
         val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
         val noisy = placed(
             Triple("متن واقعی صفحه که همه دیده‌اند", 84, 103),
-            // اطمینانِ ۹۶ — با قانونِ قدیمی پذیرفته می‌شد.
-            Triple("۰   ۰۰   ی   ل    2 ,| ۳   و۱ ب ۱", 96, 400),
+            // متنِ کاملاً سالم و با اطمینانِ ۹۶ — تنها ایرادش این است که فقط
+            // حالتِ پرت آن را دیده. باید *به همین دلیل* رد شود، نه به دلیل کیفیت.
+            Triple("این خطِ سالمی است ولی تنها حالت پرت آن را دید", 96, 400),
         )
         val vote = LineVoter.combine(
             listOf(
@@ -218,7 +219,8 @@ class LineVoterTest {
         val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
         val noisy = placed(
             Triple("متن واقعی صفحه که همه دیده‌اند", 84, 103),
-            Triple("۰   ۰۰   ی   ل    2 ,| ۳   و۱ ب ۱", 96, 400),
+            // یک کلمهٔ واقعی دارد (پس از کفِ قاطع رد می‌شود) ولی بقیه‌اش آشغال است.
+            Triple("ابر ۰۰ ی ل ۲,| ۳ و۱ ب ۱", 96, 400),
         )
         // بدونِ اعلامِ «پرت» — این بار باید دروازهٔ کیفیت (باگ ۱) جلویش را بگیرد.
         val vote = LineVoter.combine(
@@ -229,7 +231,10 @@ class LineVoterTest {
             ),
         )
         assertEquals(1, vote.acceptedLines.size)
-        assertTrue(vote.rejectedLines.single().reason.orEmpty().contains("شبیه متن نیست"))
+        assertTrue(
+            vote.rejectedLines.single().reason.orEmpty(),
+            vote.rejectedLines.single().reason.orEmpty().contains("شبیه متن نیست"),
+        )
     }
 
     @Test
@@ -247,5 +252,105 @@ class LineVoterTest {
             ),
         )
         assertEquals(2, vote.acceptedLines.size)
+    }
+
+    // ─────────── کفِ قاطع روی خطوطِ چندرأیی (باگ ۲) ───────────
+
+    @Test
+    fun `a short junk line is rejected even when several modes saw it`() {
+        // «,سس» در گزارشِ واقعی: ۲ رأی و اطمینان ۹۰، و با این حال آشغال.
+        val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
+        val withJunk = placed(
+            Triple("متن واقعی صفحه که همه دیده‌اند", 86, 102),
+            Triple(",سس", 90, 900),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, withJunk),
+                VariantLines(BinarizationMethod.CLAHE_OTSU, withJunk),
+                VariantLines(BinarizationMethod.SAUVOLA, real),
+            ),
+        )
+        assertEquals(1, vote.acceptedLines.size)
+        val rejected = vote.rejectedLines.single()
+        assertEquals(2, rejected.votes)
+        assertTrue(rejected.reason.orEmpty(), rejected.reason.orEmpty().contains("معنادار نیست"))
+    }
+
+    // ─────────── ادغامِ ردیفِ شکسته و گاردِ ضدتکرار (باگ ۱) ───────────
+
+    @Test
+    fun `one physical row split into two clusters is merged and voted on`() {
+        // بازسازیِ گزارش: دو خوشه با فاصلهٔ مرکزِ ۹۹ پیکسل، در صفحه‌ای که فاصلهٔ
+        // معمولِ دو خطِ پیاپی‌اش ~۳۲۰ پیکسل است. این‌ها یک خط‌اند.
+        fun page(vararg extras: Triple<String, Int, Int>) = placed(
+            Triple("خط اول صفحه است", 90, 100),
+            Triple("خط دوم صفحه است", 90, 420),
+            Triple("خط سوم صفحه است", 90, 740),
+            *extras,
+            Triple("خط پایانی صفحه است", 90, 1380),
+        )
+        val a = page(Triple("ما به‌شدت تحت تأثیر نگرش ما است", 95, 1060))
+        val b = page(Triple("ما به‌شدت تحت تأثیر نکرش ما است", 96, 1159))
+
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, a),
+                VariantLines(BinarizationMethod.CLAHE_OTSU, a),
+                VariantLines(BinarizationMethod.SAUVOLA, b),
+            ),
+        )
+        // پنج خط، نه شش: دو خوشه یکی شده‌اند.
+        assertEquals(5, vote.acceptedLines.size)
+        val merged = vote.acceptedLines.first { it.text.startsWith("ما به‌شدت") }
+        assertEquals(3, merged.votes)
+        // نسخه‌ای که دو حالت رویش توافق دارند برنده است — یعنی املای درست.
+        assertEquals("ما به‌شدت تحت تأثیر نگرش ما است", merged.text)
+    }
+
+    @Test
+    fun `an adjacent near-duplicate line is dropped by the guard`() {
+        // فاصلهٔ ۳۰۰ پیکسلی یعنی ادغامِ هندسی عمل نمی‌کند؛ اینجا فقط گاردِ ضدتکرار
+        // می‌تواند جلوی تکرار را بگیرد.
+        val a = placed(
+            Triple("خط اول صفحه است", 90, 100),
+            Triple("ما به‌شدت تحت تأثیر نگرش ما است", 95, 400),
+            Triple("ما به‌شدت تحت تأثیر نکرش ما است", 96, 700),
+            Triple("خط پایانی صفحه است", 90, 1000),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, a),
+                VariantLines(BinarizationMethod.CLAHE_OTSU, a),
+                VariantLines(BinarizationMethod.SAUVOLA, a),
+            ),
+        )
+        assertEquals(3, vote.acceptedLines.size)
+        val dropped = vote.rejectedLines.single()
+        assertTrue(dropped.reason.orEmpty(), dropped.reason.orEmpty().contains("تکرارِ خطِ مجاور"))
+    }
+
+    @Test
+    fun `two genuinely different neighbouring lines are both kept`() {
+        val a = placed(
+            Triple("خط اول صفحه است", 90, 100),
+            Triple("متقاعدسازی بستگی دارد فرض کنید", 92, 400),
+            Triple("ارائه می‌دهید و همچنین مهارت بسیار", 91, 700),
+            Triple("خط پایانی صفحه است", 90, 1000),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, a),
+                VariantLines(BinarizationMethod.CLAHE_OTSU, a),
+                VariantLines(BinarizationMethod.SAUVOLA, a),
+            ),
+        )
+        assertEquals(4, vote.acceptedLines.size)
+    }
+
+    @Test
+    fun `folding makes look-alike letters compare equal`() {
+        assertEquals(LineVoter.folded("نگرش"), LineVoter.folded("نكرش"))
+        assertEquals(LineVoter.folded("همچنین"), LineVoter.folded("همجنین"))
     }
 }

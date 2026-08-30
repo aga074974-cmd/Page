@@ -43,6 +43,24 @@ class SetLexicon(words: Set<String>) : PersianLexicon {
     override val size: Int get() = words.size
 
     override fun contains(word: String): Boolean {
+        if (baseContains(word)) return true
+
+        // واژهٔ ترکیبیِ نیم‌فاصله‌دار. فهرستِ واژگان از پیکره‌ای آمده که نیم‌فاصله
+        // ندارد، پس «به‌راحتی» و «نگرش‌های» در آن نیستند در حالی که واژه‌های کاملاً
+        // معتبری‌اند.
+        //
+        // ⚠ شرطِ «دستِ‌کم یک پاره وندِ شناخته‌شده باشد» حیاتی است. بدونِ آن، *هر* دو
+        // واژه‌ای که با نیم‌فاصله کنار هم بنشینند «واژه» شمرده می‌شدند و اصلاح‌گر
+        // «کهبه‌راحتی» را با اطمینان به «کهنه‌راحتی» تبدیل می‌کرد.
+        if (word.indexOf(PersianTextNormalizer.ZWNJ) < 0) return false
+        val parts = word.split(PersianTextNormalizer.ZWNJ).filter { it.isNotBlank() }
+        if (parts.size < 2 || parts.size > MAX_ZWNJ_PARTS) return false
+        if (parts.none { it in AFFIX_PARTS }) return false
+        return parts.all { part -> part in AFFIX_PARTS || baseContains(part) }
+    }
+
+    /** بررسیِ پایه: خودِ واژه، یا واژه پس از برداشتنِ یک پیشوند/پسوندِ رایج. */
+    private fun baseContains(word: String): Boolean {
         val key = PersianTextNormalizer.lexiconKey(word)
         if (key.length < 2) return false
         if (key in words) return true
@@ -63,6 +81,17 @@ class SetLexicon(words: Set<String>) : PersianLexicon {
     companion object {
         /** کمینهٔ طولِ ریشه پس از برداشتنِ پسوند. */
         private const val MIN_STEM = 3
+
+        /** بیشترین پارهٔ نیم‌فاصله‌ای که یک واژهٔ ترکیبی می‌تواند داشته باشد. */
+        private const val MAX_ZWNJ_PARTS = 3
+
+        /**
+         * وندها و حرف‌های ربطی که یک ترکیبِ نیم‌فاصله‌ای را «واژه» می‌کنند.
+         * دستِ‌کم یکی از پاره‌ها باید از این فهرست باشد.
+         */
+        private val AFFIX_PARTS = setOf(
+            "می", "نمی", "بی", "ها", "های", "هایی", "تر", "ترین", "ای", "به", "که",
+        )
 
         /** پیشوندهای پرکاربردِ فعلی/نفی. ترتیب مهم است: بلندتر اول. */
         private val PREFIXES = listOf("نمی", "می", "بی")

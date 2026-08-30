@@ -19,10 +19,19 @@ data class LineQuality(
     val longestSpaceRun: Int,
     /** تعداد توکن‌های کلمه‌مانند (نه نسبت). */
     val wordLikeTokens: Int,
-    /** آیا خط از دروازه رد شد؟ */
+    /** تعداد کاراکترهای غیرفاصله. */
+    val nonSpaceChars: Int,
+    /** آیا خط از دروازهٔ کامل رد شد؟ (فقط برای خطوطِ تک‌رأیی اعمال می‌شود) */
     val looksLikeText: Boolean,
-    /** اگر رد نشد، کدام معیار شکست — به فارسی، برای گزارش. */
+    /**
+     * آیا خط از **کفِ قاطع** رد شد؟ این یکی روی *همهٔ* خطوط اعمال می‌شود، هر چند
+     * رأی که داشته باشند. ر.ک. [LineQualityGate.hardFloorFailure].
+     */
+    val passesHardFloor: Boolean,
+    /** اگر از دروازهٔ کامل رد نشد، کدام معیار شکست — به فارسی، برای گزارش. */
     val failure: String? = null,
+    /** اگر از کفِ قاطع رد نشد، چرا. */
+    val hardFloorFailure: String? = null,
 ) {
     /** خلاصهٔ تک‌خطی برای گزارش اشکال‌یابی. */
     fun summary(): String = "حرف %.2f، کلمه %.2f (%d)، مشکوک %.2f، فاصله %.2f، رشتهٔ فاصله %d"
@@ -45,8 +54,16 @@ data class LineQuality(
  * همان گزارشی کالیبره شده‌اند که این باگ را نشان داد: هر ۲۸ خطِ آشغالِ آن گزارش
  * رد می‌شوند و هر دو خطِ متنِ واقعی می‌مانند.
  *
- * ⚠ این دروازه **فقط روی خطوطِ تک‌رأیی** اعمال می‌شود. خطی که دو حالت یا بیشتر
- * دیده‌اند شاهدِ مستقل دارد و هرگز از اینجا رد نمی‌شود — حتی اگر عجیب به نظر برسد.
+ * ── دو لایه ──────────────────────────────────────────────────────────────────
+ * **کفِ قاطع** ([hardFloorFailure]) روی *همهٔ* خطوط اعمال می‌شود: خطی که هیچ کلمهٔ
+ * واقعی ندارد، یا کمتر از دو کلمه دارد و کوتاه هم هست، آشغال است حتی اگر چند حالت
+ * دیده باشندش و اطمینانش ۹۰ باشد («,سس» در گزارش، با ۲ رأی و اطمینان ۹۰).
+ *
+ * **دروازهٔ کامل** ([looksLikeText]) فقط روی خطوطِ *تک‌رأیی* اعمال می‌شود. معیارهای
+ * فاصله و نسبتِ کلمه عمداً روی خطوطِ چندرأیی اجرا نمی‌شوند، چون عنوان‌ها و
+ * سرصفحه‌های واقعی هم رشته‌های فاصلهٔ بلند دارند: در همان گزارش «نگرش و ⟨۶۰ فاصله⟩
+ * باور /۱۷» و «نگرش‌های اشتباه در دنیای ⟨۱۹ فاصله⟩ فروش» هر دو متنِ درستِ صفحه‌اند و
+ * دروازهٔ کامل هر دو را می‌انداخت. ر.ک. [LineVoter.APPLY_FULL_GATE_TO_ALL_LINES].
  *
  * A text-shape gate for lines only one binarization saw: Tesseract is happily
  * confident about noise, so confidence alone cannot filter hallucinated lines.
@@ -70,6 +87,12 @@ object LineQualityGate {
 
     /** کمینهٔ تعدادِ مطلقِ کلمه‌های واقعی — یک کلمهٔ تنها شاهدِ کافی نیست. */
     const val MIN_WORD_LIKE_TOKENS = 2
+
+    /**
+     * خطی که کمتر از [MIN_WORD_LIKE_TOKENS] کلمهٔ واقعی دارد، اگر از این هم
+     * کوتاه‌تر باشد به‌طور قاطع رد می‌شود — هر چند رأی که آورده باشد.
+     */
+    const val HARD_FLOOR_MIN_CHARS = 6
 
     /** کمینهٔ حروفِ چسبیده‌ای که یک توکن را «کلمه‌مانند» می‌کند. */
     private const val MIN_LETTER_RUN = 2
@@ -159,6 +182,15 @@ object LineQualityGate {
             else -> null
         }
 
+        // ── کفِ قاطع: روی هر خطی، صرف‌نظر از تعداد رأی ────────────────────────
+        val hardFloorFailure = when {
+            tokens.isEmpty() -> "خط خالی است"
+            wordLike == 0 -> "هیچ کلمهٔ واقعی ندارد"
+            wordLike < MIN_WORD_LIKE_TOKENS && nonSpace < HARD_FLOOR_MIN_CHARS ->
+                "فقط $wordLike کلمه و $nonSpace کاراکتر دارد"
+            else -> null
+        }
+
         return LineQuality(
             letterRatio = letterRatio,
             wordLikeRatio = wordLikeRatio,
@@ -166,8 +198,11 @@ object LineQualityGate {
             spaceRatio = spaceRatio,
             longestSpaceRun = longestRun,
             wordLikeTokens = wordLike,
+            nonSpaceChars = nonSpace,
             looksLikeText = failure == null,
+            passesHardFloor = hardFloorFailure == null,
             failure = failure,
+            hardFloorFailure = hardFloorFailure,
         )
     }
 

@@ -6,7 +6,8 @@ import ir.page.persianocr.image.BinarizationMethod
 import ir.page.persianocr.image.PreprocessResult
 import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.text.AssetLexicon
-import ir.page.persianocr.text.ConfusionCorrector
+import ir.page.persianocr.text.CorrectionKind
+import ir.page.persianocr.text.PersianSpellCorrector
 import ir.page.persianocr.text.PersianTextNormalizer
 import ir.page.persianocr.text.PersianTextOptions
 import java.io.File
@@ -256,21 +257,25 @@ class OcrRepository(
         val lexicon = AssetLexicon.load(context)
         if (lexicon.size == 0) return text
 
-        val report = DiagnosticLog.timed(TAG, "اصلاح واژگانی") {
-            ConfusionCorrector.correct(text, lexicon)
+        val report = DiagnosticLog.timed(TAG, "اصلاح املایی") {
+            PersianSpellCorrector.correct(text, lexicon)
         }
         DiagnosticLog.i(
             TAG,
-            "اصلاح واژگانی: ${report.changeCount} واژه اصلاح شد" +
-                " • ${report.unresolved} واژهٔ ناشناخته بدون نامزدِ یکتا رها شد" +
+            "اصلاح املایی: ${report.count} تغییر" +
+                " (${CorrectionKind.SUBSTITUTION.label} ${report.countOf(CorrectionKind.SUBSTITUTION)}" +
+                "، ${CorrectionKind.SPLIT.label} ${report.countOf(CorrectionKind.SPLIT)}" +
+                "، ${CorrectionKind.MERGE.label} ${report.countOf(CorrectionKind.MERGE)}" +
+                "، ${CorrectionKind.ZWNJ.label} ${report.countOf(CorrectionKind.ZWNJ)})" +
+                " • ${report.unresolved} واژهٔ ناشناخته دست‌نخورده ماند" +
                 " • فرهنگ ${lexicon.size} واژه",
         )
         // فهرستِ تغییرها کوتاه نگه داشته می‌شود تا گزارش پر نشود.
-        report.changes.take(MAX_LOGGED_CORRECTIONS).forEach { (before, after) ->
-            DiagnosticLog.d(TAG, "  «$before» → «$after»")
+        report.corrections.take(MAX_LOGGED_CORRECTIONS).forEach {
+            DiagnosticLog.d(TAG, "  [${it.kind.label}] «${it.before}» → «${it.after}»")
         }
-        if (report.changeCount > MAX_LOGGED_CORRECTIONS) {
-            DiagnosticLog.d(TAG, "  … و ${report.changeCount - MAX_LOGGED_CORRECTIONS} اصلاحِ دیگر")
+        if (report.count > MAX_LOGGED_CORRECTIONS) {
+            DiagnosticLog.d(TAG, "  … و ${report.count - MAX_LOGGED_CORRECTIONS} تغییرِ دیگر")
         }
         return report.text
     }

@@ -116,6 +116,59 @@ object LineVoter {
     const val ACCEPT_OUTLIER_SINGLETONS = false
 
     /**
+     * ★ باگ ۲ — آیا دروازهٔ *کاملِ* کیفیت روی خطوطِ چندرأیی هم اجرا شود؟
+     *
+     * پیش‌فرض `false`. کفِ قاطعِ [LineQualityGate] در هر حال روی همهٔ خطوط اجرا
+     * می‌شود و همان چیزی است که «,سس» (۲ رأی، اطمینان ۹۰) را می‌اندازد. ولی
+     * دروازهٔ کامل روی خطوطِ چندرأیی خطرناک است: معیارهای فاصله، عنوان‌های واقعیِ
+     * صفحه را هم می‌اندازند — در گزارش، «نگرش و … باور /۱۷» و «نگرش‌های اشتباه در
+     * دنیای … فروش» هر دو با آن حذف می‌شدند. اگر خواستید آزمایشش کنید `true` کنید.
+     */
+    const val APPLY_FULL_GATE_TO_ALL_LINES = false
+
+    /**
+     * ★ باگ ۱ — دو خوشه وقتی «یک خطِ واقعی»اند که مرکزشان از این نسبت از
+     * *فاصلهٔ معمولِ دو خطِ پیاپیِ همین صفحه* نزدیک‌تر باشد.
+     *
+     * فاصلهٔ معمول از خودِ صفحه اندازه گرفته می‌شود (میانهٔ فاصلهٔ مرکزها) نه از یک
+     * عددِ ثابت، چون به بزرگ‌نمایی و اندازهٔ قلم وابسته است. در گزارشِ واقعی این
+     * فاصله ۳۱۸ پیکسل بود، پس آستانه ۱۹۱ شد: دو خوشه‌ای که ۹۹ پیکسل فاصله داشتند
+     * و در واقع یک خط بودند ادغام شدند، و نزدیک‌ترین دو خطِ *واقعاً جدا* که ۲۲۹
+     * پیکسل فاصله داشتند دست‌نخورده ماندند.
+     */
+    private const val SAME_LINE_PITCH_FACTOR = 0.6
+
+    /** وقتی خطوط آن‌قدر کم‌اند که «فاصلهٔ معمول» معنا ندارد، از ارتفاعِ خط استفاده می‌شود. */
+    private const val SAME_LINE_HEIGHT_FACTOR = 0.6
+
+    /**
+     * ★ باگ ۱ (گاردِ ضدتکرار) — دو خطِ *مجاورِ* پذیرفته‌شده اگر پس از یکسان‌سازیِ
+     * حروفِ هم‌شکل این‌قدر شبیه باشند، یکی‌شان تکرارِ دیگری است.
+     */
+    private const val DUPLICATE_SIMILARITY = 0.85
+
+    /**
+     * گاردِ ضدتکرار فقط روی خطوطی اجرا می‌شود که دستِ‌کم این‌قدر حرف دارند.
+     *
+     * روی خطِ کوتاه، شباهتِ متنی قابل‌اعتماد نیست: «خط دوم صفحه» و «خط سوم صفحه»
+     * ۹۲٪ شبیه‌اند و دو خطِ کاملاً متفاوت‌اند. تکرارِ واقعی که این گارد برای آن
+     * ساخته شده، خطِ بلندی است که فقط در یکی‌دو حرف فرق دارد (در گزارشِ واقعی،
+     * ۴۸ حرف با شباهتِ ۹۸٪).
+     */
+    private const val DUPLICATE_MIN_CHARS = 20
+
+    /**
+     * حروفی که در OCR فارسی مدام با هم اشتباه می‌شوند، برای مقایسهٔ ضدتکرار به یک
+     * نماینده نگاشته می‌شوند: «نگرش» و «نکرش» باید یک شکلِ متعارف بدهند.
+     */
+    private val FOLDED: Map<Char, Char> = mapOf(
+        'گ' to 'ک', 'چ' to 'ج', 'ژ' to 'ز', 'ر' to 'ز', 'ذ' to 'د',
+        'پ' to 'ب', 'ث' to 'ت', 'ظ' to 'ط', 'غ' to 'ع', 'ش' to 'س',
+        'ض' to 'ص', 'خ' to 'ح', 'ق' to 'ف',
+        'ي' to 'ی', 'ك' to 'ک', 'ى' to 'ی', 'ة' to 'ه', 'أ' to 'ا', 'إ' to 'ا', 'آ' to 'ا',
+    )
+
+    /**
      * تلفیقِ خروجی همهٔ حالت‌ها در یک متنِ واحد.
      *
      * @param variants خروجی خطیِ هر حالت. با یک عضو، همان عضو بدون تغییر برمی‌گردد.
@@ -150,9 +203,15 @@ object LineVoter {
             variant.lines.isEmpty() || variant.lines.all { it.hasGeometry }
         }
 
-        val clusters = if (geometric) clusterByY(variants) else clusterByAlignment(variants)
+        val clusters = if (geometric) {
+            // ★ باگ ۱ — پس از خوشه‌بندی بر پایهٔ هم‌پوشانی، خوشه‌هایی که در واقع یک
+            // خط‌اند ولی جعبه‌هایشان هم‌پوشانی کافی نداشت هم ادغام می‌شوند.
+            mergeSplitRows(clusterByY(variants))
+        } else {
+            clusterByAlignment(variants)
+        }
 
-        val voted = clusters.map { decide(it, variants.size, outliers) }
+        val voted = dropDuplicates(clusters.map { decide(it, variants.size, outliers) })
         val text = voted.filter { it.accepted }.joinToString("\n") { it.text }
         return VoteResult(text, voted, variants.size, geometric)
     }
@@ -210,6 +269,114 @@ object LineVoter {
         val shorter = min(bottomA - topA, bottomB - topB)
         if (shorter <= 0) return 0.0
         return overlap.toDouble() / shorter
+    }
+
+    /**
+     * ★ باگ ۱ — ادغامِ خوشه‌هایی که در واقع یک ردیفِ فیزیکی‌اند.
+     *
+     * ── چرا لازم شد ──────────────────────────────────────────────────────────
+     * هم‌پوشانیِ جعبه‌ها معیارِ خوبی است ولی کافی نیست: وقتی Tesseract یک ردیف را
+     * در دو حالتِ مختلف کمی بالاتر و پایین‌تر می‌بندد، دو جعبه ممکن است اصلاً روی
+     * هم نیفتند و دو خوشه بسازند. در گزارشِ واقعی همین شد و «ما به‌شدت تحت تأثیر
+     * نگرش ما است…» دوبار در متنِ نهایی آمد، یک‌بار با «نگرش» و یک‌بار با «نکرش».
+     *
+     * ── معیار ────────────────────────────────────────────────────────────────
+     * مرکزِ دو خوشهٔ مجاور از [SAME_LINE_PITCH_FACTOR] برابرِ *فاصلهٔ معمولِ دو خطِ
+     * پیاپیِ همین صفحه* نزدیک‌تر باشد. این فاصله از خودِ صفحه اندازه گرفته می‌شود،
+     * پس با بزرگ‌نمایی و اندازهٔ قلم خودکار تطبیق پیدا می‌کند.
+     *
+     * پس از ادغام، همان [decide] روی خوشهٔ بزرگ‌تر اجرا می‌شود، یعنی نسخه‌ها با هم
+     * رأی‌گیری می‌کنند و آنکه رأی و توافقِ بیشتری دارد برنده می‌شود.
+     */
+    private fun mergeSplitRows(clusters: List<List<LineCandidate>>): List<List<LineCandidate>> {
+        if (clusters.size < 2) return clusters
+
+        val centers = clusters.map { cluster -> cluster.sumOf { it.line.centerY } / cluster.size }
+        val gaps = centers.zipWithNext { a, b -> b - a }.filter { it > 0 }
+        val heights = clusters.flatMap { cluster -> cluster.map { it.line.heightPx } }
+
+        val threshold = when {
+            // میانهٔ فاصله‌ها فقط وقتی معنا دارد که چند خط داشته باشیم.
+            gaps.size >= 3 -> SAME_LINE_PITCH_FACTOR * median(gaps)
+            heights.isNotEmpty() -> SAME_LINE_HEIGHT_FACTOR * median(heights)
+            else -> return clusters
+        }
+
+        val merged = ArrayList<MutableList<LineCandidate>>(clusters.size)
+        var lastCenter = Int.MIN_VALUE
+        for ((index, cluster) in clusters.withIndex()) {
+            val center = centers[index]
+            if (merged.isNotEmpty() && (center - lastCenter) < threshold) {
+                merged.last() += cluster
+            } else {
+                merged += cluster.toMutableList()
+            }
+            // مرکزِ مرجع، مرکزِ خوشهٔ جاری است نه میانگینِ ادغام‌شده: وگرنه هر ادغام
+            // مرجع را پایین می‌کشید و زنجیره‌ای از خطوط را به هم می‌چسباند.
+            lastCenter = center
+        }
+        return merged
+    }
+
+    private fun median(values: List<Int>): Int {
+        val sorted = values.sorted()
+        return sorted[sorted.size / 2]
+    }
+
+    /**
+     * ★ باگ ۱ (گاردِ ضدتکرار) — آخرین تورِ ایمنی.
+     *
+     * اگر با وجود ادغامِ بالا باز هم دو خطِ *مجاورِ* پذیرفته‌شده عملاً یک متن باشند
+     * (پس از یکسان‌سازیِ ک/گ، ج/چ و حذفِ نیم‌فاصله شباهتشان از
+     * [DUPLICATE_SIMILARITY] بیشتر باشد)، فقط باکیفیت‌ترین‌شان می‌ماند: بیشترین
+     * رأی، بعد بیشترین توافق، بعد بالاترین اطمینان.
+     *
+     * خطوطِ ردشده دست نمی‌خورند — آن‌ها اصلاً در متنِ نهایی نیستند.
+     */
+    private fun dropDuplicates(lines: List<VotedLine>): List<VotedLine> {
+        if (lines.size < 2) return lines
+
+        val result = lines.toMutableList()
+        var previousAccepted = -1
+        for (index in result.indices) {
+            if (!result[index].accepted) continue
+            val previous = previousAccepted
+            previousAccepted = index
+            if (previous < 0) continue
+
+            val left = folded(result[previous].text)
+            val right = folded(result[index].text)
+            if (min(left.length, right.length) < DUPLICATE_MIN_CHARS) continue
+
+            val similarity = similarity(left, right)
+            if (similarity < DUPLICATE_SIMILARITY) continue
+
+            // برنده: بیشترین رأی، بعد توافق، بعد اطمینان.
+            val order = compareBy<VotedLine>({ it.votes }, { it.agreement }, { it.confidence })
+            val loser = if (order.compare(result[previous], result[index]) >= 0) index else previous
+            val keeper = if (loser == index) previous else index
+            result[loser] = result[loser].copy(
+                accepted = false,
+                reason = "تکرارِ خطِ مجاور (شباهت %.2f با «%s»)".format(
+                    java.util.Locale.US,
+                    similarity,
+                    result[keeper].text.take(30),
+                ),
+            )
+            previousAccepted = keeper
+        }
+        return result
+    }
+
+    /**
+     * شکلِ متعارفِ ضدتکرار: حروفِ هم‌شکل به یک نماینده، بدون فاصله و نقطه‌گذاری.
+     * «نگرش» و «نکرش» اینجا یکی می‌شوند، که دقیقاً هدفِ این گارد است.
+     */
+    internal fun folded(text: String): String = buildString(text.length) {
+        for (ch in text) {
+            val mapped = FOLDED[ch] ?: ch
+            if (mapped.isLetterOrDigit()) append(mapped)
+        }
     }
 
     // ────────────────── مسیرِ جایگزین: ترازِ متنیِ توالی ──────────────────
@@ -341,18 +508,23 @@ object LineVoter {
         val minVotes = if (variantCount >= 3) 2 else 1
         val hasMajority = votes >= minVotes
 
-        val quality = if (hasMajority) null else LineQualityGate.assess(text)
+        // ★ باگ ۲ — کیفیت حالا برای *هر* خط سنجیده می‌شود، نه فقط تک‌رأیی‌ها.
+        // کفِ قاطعِ آن روی همه اعمال می‌شود؛ دروازهٔ کامل (پیش‌فرض) فقط روی تک‌رأیی‌ها.
+        val quality = LineQualityGate.assess(text)
 
         val reason = when {
-            hasMajority -> null
+            !quality.passesHardFloor ->
+                "متن معنادار نیست — ${quality.hardFloorFailure}"
+
+            hasMajority && !APPLY_FULL_GATE_TO_ALL_LINES -> null
 
             onlyOutliers && !ACCEPT_OUTLIER_SINGLETONS ->
                 "تنها حالتِ پرت (${methods.joinToString { it.name }}) این خط را دید"
 
-            quality != null && !quality.looksLikeText ->
-                "تک‌رأیی و شبیه متن نیست — ${quality.failure}"
+            !quality.looksLikeText ->
+                "شبیه متن نیست — ${quality.failure}"
 
-            confidence < SINGLETON_MIN_CONFIDENCE ->
+            !hasMajority && confidence < SINGLETON_MIN_CONFIDENCE ->
                 "تک‌رأیی با اطمینان $confidence (کمینه $SINGLETON_MIN_CONFIDENCE)"
 
             else -> null
