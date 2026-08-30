@@ -17,7 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** مرحله‌ای که هم‌اکنون در حال اجراست — برای نمایش در نوار پیشرفت. */
-enum class OcrPhase { INSTALLING_DATA, INITIALISING, RECOGNISING, POSTPROCESSING }
+enum class OcrPhase { INSTALLING_DATA, INITIALISING, RECOGNISING, VOTING, POSTPROCESSING }
 
 /** گزارش پیشرفت. [percent] درصدِ کلِ عملیات است (۰ تا ۱۰۰). */
 data class OcrProgress(
@@ -28,7 +28,8 @@ data class OcrProgress(
 )
 
 /**
- * لایهٔ هماهنگ‌کنندهٔ OCR: نصب داده‌های زبان، مقداردهی موتور، اجرای چندگذره و پس‌پردازش.
+ * لایهٔ هماهنگ‌کنندهٔ OCR: نصب داده‌های زبان، مقداردهی موتور، اجرای چندگذره،
+ * رأی‌گیری خط‌به‌خط و پس‌پردازش.
  *
  * تمام کارهای سنگین روی [dispatcher] (پیش‌فرض: [Dispatchers.Default]) اجرا می‌شوند و
  * یک [Mutex] تضمین می‌کند که هرگز دو فراخوانیِ هم‌زمان به Tesseract (که thread-safe
@@ -49,7 +50,7 @@ class OcrRepository(
         const val LANGUAGE_SPEC = "fas+ara"
 
         /** نیم‌فاصله — فقط برای شمارش در گزارش. */
-        private const val ZWNJ = '\u200C'
+        private const val ZWNJ = '‌'
     }
 
     private val installer = TessDataInstaller(context)
@@ -60,14 +61,17 @@ class OcrRepository(
      * اجرای کامل OCR روی خروجی پیش‌پردازش.
      *
      * @param preprocessed خروجی خط لولهٔ OpenCV.
-     * @param methods حالت‌هایی که باید امتحان شوند. برای «چندگذره» همهٔ حالت‌ها و برای
-     *   اجرای سریع فقط حالت انتخابی کاربر را بدهید.
-     * @param pageSegMode یکی از [TesseractEngine.PSM_AUTO] یا [TesseractEngine.PSM_SINGLE_BLOCK].
+     * @param methods حالت‌هایی که باید امتحان شوند. با بیش از یک حالت، متن نهایی از
+     *   **رأی‌گیری خط‌به‌خط** ساخته می‌شود، نه از انتخابِ یک حالتِ برنده.
+     * @param pageMode حالت قطعه‌بندی صفحه.
+     * @param maxBitmapPixels سقفِ اندازهٔ هر Bitmapی که به Tesseract داده می‌شود؛
+     *   تصویرِ بزرگ‌تر از این به نوارهای افقی کاشی‌بندی می‌شود.
      */
     suspend fun recognise(
         preprocessed: PreprocessResult,
         methods: List<BinarizationMethod>,
-        pageSegMode: Int = TesseractEngine.PSM_AUTO,
+        pageMode: PageMode = PageMode.DEFAULT,
+        maxBitmapPixels: Long = Long.MAX_VALUE,
         textOptions: PersianTextOptions = PersianTextOptions(),
         onProgress: (OcrProgress) -> Unit = {},
     ): OcrResult = withContext(dispatcher) {
@@ -75,16 +79,27 @@ class OcrRepository(
         mutex.withLock {
             val started = System.currentTimeMillis()
 
+            // ── آماده‌سازی ────────────────────────────────────────────────────
+            val bands = preprocessed.bands(maxBitmapPixels)
+            val dpi = TesseractEngine.effectiveDpi(preprocessed.estimatedCharHeightPx)
+
             DiagnosticLog.section("اجرای OCR")
             DiagnosticLog.i(
                 TAG,
                 "حالت‌ها: ${methods.joinToString { it.name }}" +
-                    " • PSM=$pageSegMode" +
-                    " • تصویر ${preprocessed.width}×${preprocessed.height}",
+                    " • ${pageMode.name} (PSM=${pageMode.psm})" +
+                    " • تصویر ${preprocessed.width}×${preprocessed.height}" +
+                    " • DPI مؤثر $dpi",
             )
+            if (bands.size > 1) {
+                DiagnosticLog.i(
+                    TAG,
+                    "تصویر به ${bands.size} نوار افقی کاشی‌بندی شد (برش فقط در ردیف‌های خالی): " +
+                        bands.joinToString { "${it.first}–${it.last}" },
+                )
+            }
             DiagnosticLog.d(TAG, "گزینه‌های پس‌پردازش فارسی: $textOptions")
 
-            // ── آماده‌سازی: کپی داده‌های زبان و مقداردهی موتور ──────────────────
             onProgress(OcrProgress(OcrPhase.INSTALLING_DATA, 0))
             val dataPath: File = installer.install(LANGUAGES) { name ->
                 DiagnosticLog.i(TAG, "کپی $name از assets (فقط بار اول)")
@@ -95,106 +110,198 @@ class OcrRepository(
             onProgress(OcrProgress(OcrPhase.INITIALISING, 2))
             engine.init(dataPath, LANGUAGE_SPEC)
 
-            // ── تشخیص روی هر حالت ────────────────────────────────────────────
-            val raw = ArrayList<Triple<BinarizationMethod, String, Int>>(methods.size)
-            methods.forEachIndexed { index, method ->
-                ensureActive()
-                var bitmap: Bitmap? = null
-                try {
-                    bitmap = preprocessed.toBitmap(method)
-                    val output = engine.recognise(bitmap, pageSegMode) { enginePercent ->
-                        // درصدِ کل = سهم گذره‌های تمام‌شده + پیشرفت گذرهٔ جاری
-                        val overall = 5 + (92.0 * (index + enginePercent / 100.0) / methods.size)
-                        onProgress(
-                            OcrProgress(OcrPhase.RECOGNISING, overall.toInt(), method.label),
-                        )
+            // ── تشخیص روی هر حالت (و هر کاشی) ─────────────────────────────────
+            val outputs = LinkedHashMap<BinarizationMethod, RawOcrOutput>()
+            val totalUnits = methods.size * bands.size
+            var unitsDone = 0
+
+            for (method in methods) {
+                val texts = ArrayList<String>(bands.size)
+                val lines = ArrayList<OcrLine>()
+                var weightedConfidence = 0.0
+                var weight = 0
+
+                for ((bandIndex, band) in bands.withIndex()) {
+                    ensureActive()
+                    var bitmap: Bitmap? = null
+                    val label = if (bands.size == 1) {
+                        method.label
+                    } else {
+                        "${method.label} — کاشی ${bandIndex + 1}/${bands.size}"
                     }
-                    raw += Triple(method, output.text, output.meanConfidence)
-                    DiagnosticLog.i(
-                        TAG,
-                        "گذرهٔ ${index + 1}/${methods.size} — ${method.name}:" +
-                            " اطمینان ${output.meanConfidence}" +
-                            " • ${output.text.length} کاراکتر",
-                    )
-                    DiagnosticLog.d(TAG, "خام[${method.name}]: ${preview(output.text)}")
-                } catch (t: Throwable) {
-                    DiagnosticLog.e(TAG, "گذرهٔ ${method.name} شکست خورد", t)
-                    throw t
-                } finally {
-                    bitmap?.recycle()
+                    try {
+                        bitmap = preprocessed.toBitmap(method, band)
+                        val done = unitsDone
+                        val output = engine.recognise(bitmap, pageMode.psm, dpi) { enginePercent ->
+                            val overall = 5 + (92.0 * (done + enginePercent / 100.0) / totalUnits)
+                            onProgress(OcrProgress(OcrPhase.RECOGNISING, overall.toInt(), label))
+                        }
+                        if (output.text.isNotBlank()) texts += output.text.trim()
+                        lines += output.lines
+                        // میانگینِ وزنیِ اطمینان بر حسب تعداد خط، تا کاشی‌های کوچک
+                        // وزنِ یک صفحهٔ کامل پیدا نکنند.
+                        val bandWeight = output.lines.size.coerceAtLeast(1)
+                        weightedConfidence += output.meanConfidence.toDouble() * bandWeight
+                        weight += bandWeight
+                    } catch (t: Throwable) {
+                        DiagnosticLog.e(TAG, "گذرهٔ ${method.name} (کاشی ${bandIndex + 1}) شکست خورد", t)
+                        throw t
+                    } finally {
+                        bitmap?.recycle()
+                        unitsDone++
+                    }
                 }
+
+                val merged = RawOcrOutput(
+                    text = texts.joinToString("\n"),
+                    meanConfidence = if (weight > 0) (weightedConfidence / weight).toInt() else 0,
+                    lines = lines,
+                )
+                outputs[method] = merged
+                DiagnosticLog.i(
+                    TAG,
+                    "${method.name}: اطمینان ${merged.meanConfidence}" +
+                        " • ${merged.text.length} کاراکتر" +
+                        " • ${merged.lines.size} خط" +
+                        " • ${merged.strongWordCount}/${merged.wordCount} کلمهٔ مطمئن",
+                )
+                DiagnosticLog.d(TAG, "خام[${method.name}]: ${preview(merged.text)}")
             }
 
-            // ── پس‌پردازش فارسی و امتیازدهی ───────────────────────────────────
+            // ── رأی‌گیری خط‌به‌خط ──────────────────────────────────────────────
+            ensureActive()
+            onProgress(OcrProgress(OcrPhase.VOTING, 96))
+
+            val candidates = buildCandidates(outputs, textOptions)
+            val vote = if (methods.size > 1) {
+                LineVoter.combine(outputs.map { (method, output) -> VariantLines(method, output.lines) })
+                    .also(::logVote)
+            } else {
+                null
+            }
+
+            // در حالت چندگذره متنِ نهایی حاصلِ رأی‌گیری است؛ در حالت تک‌گذره همان
+            // خروجیِ تنها حالتِ اجراشده.
+            val chosenRaw = vote?.text?.takeIf { it.isNotBlank() } ?: candidates.first().rawText
+
             ensureActive()
             onProgress(OcrProgress(OcrPhase.POSTPROCESSING, 98))
+            val finalText = PersianTextNormalizer.normalise(chosenRaw, textOptions)
 
-            val normalised = raw.map { (method, text, confidence) ->
-                Triple(method, PersianTextNormalizer.normalise(text, textOptions), confidence)
-            }
-            val maxLength = normalised.maxOf { it.second.filterNot(Char::isWhitespace).length }
-
-            val candidates = normalised.mapIndexed { index, (method, text, confidence) ->
-                OcrCandidate(
-                    method = method,
-                    rawText = raw[index].second,
-                    text = text,
-                    meanConfidence = confidence,
-                    score = OcrCandidateScorer.score(text, confidence, maxLength),
-                )
-            }.sortedByDescending { it.score }
-
-            logCandidates(candidates)
+            logCandidates(candidates, vote)
+            logPostProcessing(chosenRaw, finalText)
 
             onProgress(OcrProgress(OcrPhase.POSTPROCESSING, 100))
             val result = OcrResult(
+                text = finalText,
                 best = candidates.first(),
                 candidates = candidates,
+                vote = vote,
                 elapsedMillis = System.currentTimeMillis() - started,
             )
             DiagnosticLog.i(
                 TAG,
-                "برگزیده: ${result.best.method.name}" +
-                    " • امتیاز ${"%.1f".format(Locale.US, result.best.score)}" +
-                    " • ${result.elapsedMillis}ms در کل",
+                if (vote == null) {
+                    "خروجی از حالت ${result.best.method.name} • ${result.elapsedMillis}ms در کل"
+                } else {
+                    "خروجی از رأی‌گیری ${vote.variantCount} حالت:" +
+                        " ${vote.acceptedLines.size} خط پذیرفته، ${vote.rejectedLines.size} خط رد شد" +
+                        " • ${result.elapsedMillis}ms در کل"
+                },
             )
             result
         }
     }
 
+    // ─────────────────────────── ساخت نامزدها ───────────────────────────
+
+    private fun buildCandidates(
+        outputs: Map<BinarizationMethod, RawOcrOutput>,
+        textOptions: PersianTextOptions,
+    ): List<OcrCandidate> = outputs.map { (method, output) ->
+        OcrCandidate(
+            method = method,
+            rawText = output.text,
+            text = PersianTextNormalizer.normalise(output.text, textOptions),
+            meanConfidence = output.meanConfidence,
+            strongWordCount = output.strongWordCount,
+            wordCount = output.wordCount,
+            lineCount = output.lines.size,
+            score = OcrCandidateScorer.score(output.meanConfidence, output.strongWordCount, output.wordCount),
+        )
+    }.sortedByDescending { it.score }
+
+    // ─────────────────────────── گزارش‌ها ───────────────────────────
+
     /**
      * جدولِ مقایسهٔ نامزدها — قلبِ اشکال‌یابیِ دقت.
      *
-     * وقتی خروجی نهایی بد است، این جدول نشان می‌دهد که آیا حالتِ بهتری وجود داشته و
-     * امتیازدهی اشتباه انتخاب کرده، یا اصلاً هیچ حالتی متن درست را نگرفته است.
+     * حالا ستون «کلمهٔ مطمئن» هم هست: همان چیزی که امتیاز را می‌سازد و نشان می‌دهد
+     * چرا یک حالتِ با اطمینانِ بالاترْ لزوماً برنده نیست.
      */
-    private fun logCandidates(candidates: List<OcrCandidate>) {
-        DiagnosticLog.i(TAG, "── مقایسهٔ نامزدها (به ترتیب امتیاز) ──")
+    private fun logCandidates(candidates: List<OcrCandidate>, vote: VoteResult?) {
+        DiagnosticLog.i(TAG, "── مقایسهٔ حالت‌ها (امتیاز = اطمینان × کلمهٔ مطمئن) ──")
         candidates.forEachIndexed { rank, candidate ->
             DiagnosticLog.i(
                 TAG,
                 String.format(
                     Locale.US,
-                    "%d) %-18s امتیاز %7.1f | اطمینان %3d | %4d کاراکتر | %3d خط",
+                    "%d) %-18s امتیاز %9.0f | اطمینان %3d | کلمهٔ مطمئن %4d/%4d | %4d کاراکتر | %3d خط",
                     rank + 1,
                     candidate.method.name,
                     candidate.score,
                     candidate.meanConfidence,
+                    candidate.strongWordCount,
+                    candidate.wordCount,
                     candidate.text.length,
-                    candidate.text.count { it == '\n' } + 1,
+                    candidate.lineCount,
                 ),
             )
         }
+        if (vote != null) {
+            DiagnosticLog.i(
+                TAG,
+                "توجه: متن نهایی از هیچ‌یک از این حالت‌ها به‌تنهایی نمی‌آید — خط‌به‌خط رأی‌گیری شده است.",
+            )
+        }
+    }
 
-        // اثرِ پس‌پردازش فارسی روی متنِ برگزیده: اگر خروجی نهایی مشکل نگارشی دارد،
-        // مقایسهٔ این دو خط نشان می‌دهد ایراد از Tesseract است یا از نرمال‌سازی.
-        val best = candidates.first()
-        DiagnosticLog.d(TAG, "پیش از پس‌پردازش: ${preview(best.rawText)}")
-        DiagnosticLog.d(TAG, "پس از پس‌پردازش:  ${preview(best.text)}")
+    /** ثبتِ کاملِ نتیجهٔ رأی‌گیری: هر خط، چند رأی آورد و از کدام حالت‌ها. */
+    private fun logVote(vote: VoteResult) {
+        DiagnosticLog.i(
+            TAG,
+            "── رأی‌گیری خط‌به‌خط: ${vote.lines.size} خطِ تراز‌شده بین ${vote.variantCount} حالت ──",
+        )
+        vote.lines.forEachIndexed { index, line ->
+            val mark = if (line.accepted) "✓" else "✗"
+            DiagnosticLog.d(
+                TAG,
+                String.format(Locale.US, "%s خط %02d | %d/%d رأی", mark, index + 1, line.votes, vote.variantCount) +
+                    " | توافق ${line.agreement} | اطمینان ${line.confidence}" +
+                    " | ${line.methods.joinToString(",") { it.name.take(4) }}" +
+                    " | ${preview(line.text, 90)}" +
+                    (line.reason?.let { " | رد: $it" } ?: ""),
+            )
+        }
+
+        // خطوطی که فقط بعضی حالت‌ها دیده‌اند، دقیقاً همان جایی است که باگِ قبلی
+        // متن را می‌انداخت. جدا هم گزارششان می‌کنیم تا زود به چشم بیاید.
+        val recovered = vote.acceptedLines.filter { it.votes < vote.variantCount }
+        if (recovered.isNotEmpty()) {
+            DiagnosticLog.i(
+                TAG,
+                "${recovered.size} خط با رأی اکثریت نگه داشته شد که دستِ‌کم یک حالت آن را انداخته بود.",
+            )
+        }
+    }
+
+    private fun logPostProcessing(raw: String, normalised: String) {
+        DiagnosticLog.d(TAG, "پیش از پس‌پردازش: ${preview(raw)}")
+        DiagnosticLog.d(TAG, "پس از پس‌پردازش:  ${preview(normalised)}")
         DiagnosticLog.d(
             TAG,
-            "تغییر طول در پس‌پردازش: ${best.rawText.length} → ${best.text.length} کاراکتر" +
-                " • نیم‌فاصله‌های افزوده‌شده: ${best.text.count { it == ZWNJ } - best.rawText.count { it == ZWNJ }}",
+            "تغییر طول در پس‌پردازش: ${raw.length} → ${normalised.length} کاراکتر" +
+                " • نیم‌فاصله‌های افزوده‌شده: ${normalised.count { it == ZWNJ } - raw.count { it == ZWNJ }}",
         )
     }
 

@@ -9,8 +9,42 @@ import java.io.File
 /** خطای مقداردهی موتور OCR. */
 class TesseractInitException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
+/** یک کلمه به‌همراه اطمینانِ خودش. */
+data class OcrWord(val text: String, val confidence: Int)
+
+/**
+ * یک خطِ متن با اطمینانِ خودش.
+ *
+ * اطمینانِ *هر خط* چیزی است که «رأی‌گیری خط‌به‌خط» به آن نیاز دارد؛ میانگینِ
+ * اطمینانِ کلِ صفحه برای این کار بی‌فایده است، چون دقیقاً همان عددی است که وقتی یک
+ * حالت یک خطِ سخت را حذف می‌کند بالا می‌رود.
+ */
+data class OcrLine(
+    val text: String,
+    val confidence: Int,
+    /** تعداد کلماتِ این خط. */
+    val wordCount: Int = 0,
+    /** تعداد کلماتی که اطمینانشان از [STRONG_WORD_CONFIDENCE] بیشتر است. */
+    val strongWordCount: Int = 0,
+) {
+    companion object {
+        /** آستانهٔ «کلمهٔ قابل‌اعتماد». */
+        const val STRONG_WORD_CONFIDENCE = 60
+    }
+}
+
 /** خروجی خام یک گذرِ OCR. */
-data class RawOcrOutput(val text: String, val meanConfidence: Int)
+data class RawOcrOutput(
+    val text: String,
+    val meanConfidence: Int,
+    /** خطوطِ تفکیک‌شده با اطمینانِ جداگانه؛ در بدترین حالت از شکستنِ [text] ساخته می‌شود. */
+    val lines: List<OcrLine> = emptyList(),
+) {
+    /** تعداد کل کلماتِ با اطمینانِ بالا در کل خروجی — سنجهٔ «کامل‌بودن» متن. */
+    val strongWordCount: Int get() = lines.sumOf { it.strongWordCount }
+
+    val wordCount: Int get() = lines.sumOf { it.wordCount }
+}
 
 /**
  * پوشش نازکی روی [TessBaseAPI].
@@ -23,11 +57,25 @@ class TesseractEngine : Closeable {
     companion object {
         private const val TAG = "Tesseract"
 
-        /** حالت پیش‌فرض قطعه‌بندی صفحه: تشخیص خودکار چیدمان. */
+        /** حالت‌های قطعه‌بندی صفحه در [PageMode] تعریف شده‌اند. */
         const val PSM_AUTO = TessBaseAPI.PageSegMode.PSM_AUTO
-
-        /** برای متن پاراگرافیِ یکدست، این حالت معمولاً دقیق‌تر است. */
         const val PSM_SINGLE_BLOCK = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
+        const val PSM_SINGLE_COLUMN = TessBaseAPI.PageSegMode.PSM_SINGLE_COLUMN
+
+        /**
+         * ارتفاعِ حروف (بر حسب پیکسل) که «۳۰۰ DPI» را نمایندگی می‌کند. برای تبدیل
+         * ارتفاع واقعیِ حروف به یک DPI مؤثر و صادقانه استفاده می‌شود.
+         */
+        private const val CHAR_HEIGHT_AT_300_DPI = 34.0
+
+        private const val MIN_DPI = 70
+        private const val MAX_DPI = 600
+
+        /** تبدیل ارتفاع تخمینیِ حروف به DPI مؤثر برای `user_defined_dpi`. */
+        fun effectiveDpi(charHeightPx: Double): Int =
+            (300.0 * charHeightPx / CHAR_HEIGHT_AT_300_DPI)
+                .toInt()
+                .coerceIn(MIN_DPI, MAX_DPI)
     }
 
     private var api: TessBaseAPI? = null
@@ -99,8 +147,6 @@ class TesseractEngine : Closeable {
             )
         }
 
-        applyAccuracyVariables(instance)
-
         api = instance
         initialisedWith = languages
         DiagnosticLog.i(TAG, "موتور Tesseract ${engineVersion()} با «$languages» آماده شد.")
@@ -108,20 +154,32 @@ class TesseractEngine : Closeable {
 
     /**
      * تنظیم‌های ریزی که روی دقتِ متن فارسی اثر مستقیم دارند.
+     *
+     * ⚠ ترتیب مهم است: مستندات خودِ کتابخانه می‌گوید «`setVariable` باید *بعد از*
+     * `init()` صدا زده شود و فقط روی متغیرهای غیرِ init کار می‌کند». پس این متد
+     * نمی‌تواند و نباید پیش از init اجرا شود. برای اینکه هیچ شکی نماند، مقدارِ
+     * بازگشتیِ هر فراخوانی بررسی و ثبت می‌شود؛ اگر Tesseract نام متغیری را نشناسد
+     * `false` برمی‌گرداند و آن را به‌صورت هشدار در گزارش می‌بینید.
+     *
+     * @param dpi وضوحِ مؤثرِ واقعیِ تصویر. عددِ ثابتِ ۳۰۰ اشتباه بود: وقتی بزرگ‌نمایی
+     *   محدود می‌شد، تصویری با ارتفاع حروف ۱۴ پیکسل (معادل ~۱۲۰ DPI) به Tesseract
+     *   می‌رسید در حالی که به آن «۳۰۰» گفته بودیم. حالا عددِ درست را می‌گوییم.
      */
-    private fun applyAccuracyVariables(instance: TessBaseAPI) {
-        DiagnosticLog.d(
-            TAG,
-            "متغیرها: preserve_interword_spaces=1، user_defined_dpi=300، tessedit_do_invert=0",
+    private fun applyAccuracyVariables(instance: TessBaseAPI, dpi: Int) {
+        val variables = listOf(
+            // فاصله‌های بین‌کلمه‌ای را همان‌طور که تشخیص داده شده نگه دار (برای متن RTL مهم است).
+            "preserve_interword_spaces" to "1",
+            "user_defined_dpi" to dpi.toString(),
+            // قطبیت تصویر در پیش‌پردازش یکدست شده؛ تلاش دوبارهٔ Tesseract برای وارونه‌کردن
+            // فقط وقت تلف می‌کند و گاهی نتیجه را بدتر می‌کند.
+            "tessedit_do_invert" to "0",
         )
-        // فاصله‌های بین‌کلمه‌ای را همان‌طور که تشخیص داده شده نگه دار (برای متن RTL مهم است).
-        instance.setVariable("preserve_interword_spaces", "1")
-        // ما خودمان تصویر را تا ~۳۰۰ DPI بزرگ کرده‌ایم؛ به Tesseract هم همین را می‌گوییم
-        // تا هشدار «DPI نامشخص» ندهد و تخمین اندازهٔ قلمش درست باشد.
-        instance.setVariable("user_defined_dpi", "300")
-        // قطبیت تصویر در پیش‌پردازش یکدست شده؛ تلاش دوبارهٔ Tesseract برای وارونه‌کردن
-        // فقط وقت تلف می‌کند و گاهی نتیجه را بدتر می‌کند.
-        instance.setVariable("tessedit_do_invert", "0")
+        val applied = variables.map { (name, value) ->
+            val ok = runCatching { instance.setVariable(name, value) }.getOrDefault(false)
+            if (!ok) DiagnosticLog.w(TAG, "Tesseract متغیر «$name» را نپذیرفت.")
+            "$name=$value${if (ok) "" else " (رد شد!)"}"
+        }
+        DiagnosticLog.d(TAG, "متغیرها: ${applied.joinToString("، ")}")
     }
 
     /**
@@ -132,7 +190,8 @@ class TesseractEngine : Closeable {
      */
     fun recognise(
         bitmap: Bitmap,
-        pageSegMode: Int = PSM_AUTO,
+        pageSegMode: Int = PageMode.DEFAULT.psm,
+        dpi: Int = 300,
         onProgress: (Int) -> Unit = {},
     ): RawOcrOutput {
         val instance = api ?: throw IllegalStateException("Engine not initialised")
@@ -140,10 +199,13 @@ class TesseractEngine : Closeable {
         val started = System.currentTimeMillis()
         DiagnosticLog.d(
             TAG,
-            "شروع تشخیص — تصویر ${bitmap.width}×${bitmap.height} • PSM=$pageSegMode",
+            "شروع تشخیص — تصویر ${bitmap.width}×${bitmap.height} • PSM=$pageSegMode • DPI=$dpi",
         )
         return try {
             instance.setPageSegMode(pageSegMode)
+            // متغیرها پیش از هر تصویر دوباره اعمال می‌شوند: هم DPI به تصویر وابسته است و
+            // هم اگر جایی `clear()` تنظیمی را دور انداخته باشد، این کار جبرانش می‌کند.
+            applyAccuracyVariables(instance, dpi)
             instance.setImage(bitmap)
 
             // این ترتیب عمدی و مطابق نمونهٔ رسمی کتابخانه است:
@@ -154,14 +216,17 @@ class TesseractEngine : Closeable {
             instance.getHOCRText(0)
             val text = instance.getUTF8Text().orEmpty()
             val confidence = runCatching { instance.meanConfidence() }.getOrDefault(0)
+            val lines = readLines(instance, text)
+            val output = RawOcrOutput(text, confidence.coerceIn(0, 100), lines)
             DiagnosticLog.d(
                 TAG,
                 "پایان تشخیص — ${System.currentTimeMillis() - started}ms" +
                     " • اطمینان $confidence" +
                     " • ${text.length} کاراکتر" +
-                    " • ${text.count { it == '\n' } + 1} خط",
+                    " • ${lines.size} خط" +
+                    " • ${output.strongWordCount}/${output.wordCount} کلمهٔ مطمئن",
             )
-            RawOcrOutput(text, confidence.coerceIn(0, 100))
+            output
         } catch (t: Throwable) {
             DiagnosticLog.e(TAG, "تشخیص با استثنا متوقف شد", t)
             throw t
@@ -171,6 +236,87 @@ class TesseractEngine : Closeable {
             runCatching { instance.clear() }
         }
     }
+
+    /**
+     * استخراج خطوط به‌همراه اطمینانِ هر خط و شمارش کلماتِ مطمئنِ هر خط.
+     *
+     * دو پیمایش روی همان iterator انجام می‌شود (کتابخانه صراحتاً اجازه می‌دهد سطوح
+     * مختلف را در هم بیامیزیم و `begin()` پیمایش را از نو شروع می‌کند):
+     *  ۱. سطح خط — برای *متنِ اصلیِ* خط. متن را از روی کلمه‌ها بازسازی نمی‌کنیم،
+     *     چون همان فاصله‌های بین‌کلمه‌ای که دنبالشان هستیم گم می‌شود.
+     *  ۲. سطح کلمه — فقط برای شمارش و اطمینانِ کلمه‌ها.
+     *
+     * اگر iterator در دسترس نباشد، به شکستنِ سادهٔ [fallbackText] برمی‌گردیم تا
+     * رأی‌گیری خط‌به‌خط در هر شرایطی کار کند.
+     */
+    private fun readLines(instance: TessBaseAPI, fallbackText: String): List<OcrLine> {
+        val iterator = runCatching { instance.getResultIterator() }.getOrNull()
+            ?: return splitFallback(fallbackText)
+
+        return try {
+            val texts = ArrayList<Pair<String, Int>>()
+            iterator.begin()
+            do {
+                val line = runCatching { iterator.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE) }
+                    .getOrNull()
+                    ?.trimEnd()
+                    .orEmpty()
+                if (line.isNotBlank()) {
+                    val confidence = runCatching {
+                        iterator.confidence(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE)
+                    }.getOrDefault(0f)
+                    texts += line to confidence.toInt().coerceIn(0, 100)
+                }
+            } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE))
+
+            if (texts.isEmpty()) return splitFallback(fallbackText)
+
+            // پیمایش دوم: شمارش کلمه‌ها به تفکیک خط.
+            val words = IntArray(texts.size)
+            val strong = IntArray(texts.size)
+            var index = -1
+            iterator.begin()
+            do {
+                if (runCatching { iterator.isAtBeginningOf(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE) }
+                        .getOrDefault(false)
+                ) {
+                    index++
+                }
+                if (index !in texts.indices) continue
+                val word = runCatching { iterator.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_WORD) }
+                    .getOrNull()
+                    ?.trim()
+                    .orEmpty()
+                if (word.isEmpty()) continue
+                words[index]++
+                val confidence = runCatching {
+                    iterator.confidence(TessBaseAPI.PageIteratorLevel.RIL_WORD)
+                }.getOrDefault(0f)
+                if (confidence >= OcrLine.STRONG_WORD_CONFIDENCE) strong[index]++
+            } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
+
+            texts.mapIndexed { i, (text, confidence) ->
+                OcrLine(text, confidence, words[i], strong[i])
+            }
+        } catch (t: Throwable) {
+            DiagnosticLog.w(TAG, "خواندن خطوط از ResultIterator ممکن نشد؛ متن خام شکسته می‌شود.", t)
+            splitFallback(fallbackText)
+        } finally {
+            runCatching { iterator.delete() }
+        }
+    }
+
+    /**
+     * مسیر جایگزین: خطوط را از خودِ متن می‌سازد. اطمینانِ خط را نداریم، پس ۰
+     * می‌گذاریم — رأی‌گیری همچنان کار می‌کند و فقط تساوی‌شکنی ضعیف‌تر می‌شود.
+     */
+    private fun splitFallback(text: String): List<OcrLine> = text.lines()
+        .map(String::trimEnd)
+        .filter { it.isNotBlank() }
+        .map { line ->
+            val count = line.split(Regex("\\s+")).count { it.isNotBlank() }
+            OcrLine(line, confidence = 0, wordCount = count, strongWordCount = 0)
+        }
 
     /** درخواست توقف تشخیصِ در حال اجرا (برای لغو از سمت کاربر). */
     fun requestStop() {

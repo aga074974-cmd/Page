@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.annotation.StringRes
 import ir.page.persianocr.image.BinarizationMethod
 import ir.page.persianocr.ocr.OcrResult
+import ir.page.persianocr.ocr.PageMode
 
 /** مرحلهٔ جاری در جریان کار. */
 enum class Stage {
@@ -49,8 +50,12 @@ data class MainUiState(
     /** اجرای OCR روی همهٔ حالت‌ها و انتخاب بهترین. */
     val multiPass: Boolean = true,
 
-    /** استفاده از PSM_SINGLE_BLOCK به‌جای PSM_AUTO (برای متن پاراگرافی). */
-    val singleBlockMode: Boolean = false,
+    /**
+     * حالت قطعه‌بندی صفحه. پیش‌فرض «بلوک یکپارچه» است: تحلیل خودکار چیدمان
+     * (PSM_AUTO) روی یک بلوکِ پیوستهٔ متن فارسی ترتیب خطوط و فاصلهٔ بین کلمات را
+     * خراب می‌کند.
+     */
+    val pageMode: PageMode = PageMode.DEFAULT,
 
     val result: OcrResult? = null,
 

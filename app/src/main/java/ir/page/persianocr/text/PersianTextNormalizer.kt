@@ -93,6 +93,30 @@ object PersianTextNormalizer {
     private val VERB_PREFIX = Regex("(^|[\\s$ZWNJ(\\[«\"'،؛:.!؟])(ن?می)[ \\t]+(?=[$LETTER])")
 
     /**
+     * واژه‌های مستقلی که **هرگز** نباید به واژهٔ پیشِ خود بچسبند.
+     *
+     * الگوی [NOUN_SUFFIX] از ابتدا هم شاملشان نبود، اما این فهرست یک نگهبانِ صریح
+     * است: اگر روزی کسی فهرست پسوندها را گسترش دهد، این بررسی جلوی
+     * «خدمات را» ← «خدمات‌را» را می‌گیرد. آزمون‌ها همین رفتار را میخکوب می‌کنند.
+     *
+     * Independent words that must never be joined to the preceding word.
+     */
+    private val INDEPENDENT_WORDS = setOf(
+        "را", "که", "و", "در", "به", "از", "با", "بر", "تا", "یا",
+        "هم", "این", "آن", "است", "شد", "بود", "هر", "چه", "نه", "اگر",
+    )
+
+    /**
+     * واژه‌هایی که خودشان مستقل‌اند و پسوند نمی‌گیرند.
+     *
+     * بدون این نگهبان «که تر» به «که‌تر» تبدیل می‌شد: الگو فقط می‌دید که واژهٔ پیشین
+     * دو حرف دارد و نمی‌دانست که آن واژه یک حرفِ ربط است.
+     */
+    private val NEVER_TAKES_SUFFIX = setOf(
+        "که", "را", "در", "به", "از", "با", "بر", "تا", "یا", "هم",
+        "این", "آن", "است", "شد", "بود", "هر", "چه", "نه", "اگر", "ای",
+    )
+    /**
      * پسوندهای جمع/تفضیلی: «ها»، «های»، «هایی»، «تر»، «تری»، «ترین».
      * واژهٔ پیشین باید دست‌کم دو حرف باشد تا «و تر» یا «ا ها» اشتباهاً نچسبد.
      * «کتاب ها» → «کتاب‌ها» ، «بزرگ ترین» → «بزرگ‌ترین»
@@ -100,6 +124,16 @@ object PersianTextNormalizer {
     private val NOUN_SUFFIX = Regex(
         "([$LETTER]{2,})[ \\t]+(ها|های|هایی|هایم|هایت|هایش|هایمان|هایتان|هایشان|تر|تری|ترین)" +
             "(?=[\\s$ZWNJ.,،؛:!؟)\\]»\"']|\$)",
+    )
+
+    /**
+     * «ای» نکره — فقط پس از واژه‌ای که به «ه» ختم می‌شود («خانه ای» ← «خانه‌ای»).
+     *
+     * پس از واژه‌های بی‌صدا، نکره در فارسی سرِهم نوشته می‌شود («کتابی») و اصلاً
+     * فاصله‌ای در کار نیست. محدودکردن به پایانهٔ «ه» جلوی «ای دوست» را هم می‌گیرد.
+     */
+    private val INDEFINITE_SUFFIX = Regex(
+        "([$LETTER]{2,}ه)[ \\t]+(ای)(?=[\\s$ZWNJ.,،؛:!؟)\\]»\"']|\$)",
     )
 
     /** فاصلهٔ اضافی قبل از نشانه‌های پایانی. */
@@ -168,11 +202,25 @@ object PersianTextNormalizer {
         var result = VERB_PREFIX.replace(text) { m ->
             m.groupValues[1] + m.groupValues[2] + ZWNJ
         }
-        result = NOUN_SUFFIX.replace(result) { m ->
-            m.groupValues[1] + ZWNJ + m.groupValues[2]
-        }
+        result = NOUN_SUFFIX.replace(result) { m -> joinSuffix(m.groupValues[1], m.groupValues[2]) }
+        result = INDEFINITE_SUFFIX.replace(result) { m -> joinSuffix(m.groupValues[1], m.groupValues[2]) }
         return result
     }
+
+    /**
+     * چسباندنِ پسوند با نیم‌فاصله — مگر آنکه یکی از دو طرف واژه‌ای مستقل باشد.
+     *
+     * دو نگهبان اعمال می‌شود:
+     *  • [INDEPENDENT_WORDS] — «را»، «که»، «و» و امثالشان هرگز پسوند نیستند.
+     *  • [NEVER_TAKES_SUFFIX] — «که تر» نباید «که‌تر» شود؛ واژهٔ پیشین باید اسم یا
+     *    صفتِ واقعی باشد، نه یک حرف اضافه.
+     */
+    private fun joinSuffix(stem: String, suffix: String): String =
+        if (suffix in INDEPENDENT_WORDS || stem in NEVER_TAKES_SUFFIX) {
+            "$stem $suffix"
+        } else {
+            "$stem$ZWNJ$suffix"
+        }
 
     // ────────────────────────── تمیزکاری فاصله ──────────────────────────
 

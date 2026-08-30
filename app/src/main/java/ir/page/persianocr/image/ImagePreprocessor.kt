@@ -32,6 +32,12 @@ enum class PreprocessStep { GRAYSCALE, UPSCALE, DENOISE, DESKEW, BINARIZE, MORPH
  * Variants live in native memory; a Bitmap is materialised only for on-screen preview.
  * فراموش نکنید که [close] را صدا بزنید.
  */
+/** حاشیهٔ سفیدی که به بالا و پایینِ هر کاشی اضافه می‌شود. */
+private const val BAND_MARGIN_PX = 16
+
+/** سهمی از یک ردیف که اگر جوهرش از آن کمتر باشد، ردیف «خالی» شمرده می‌شود. */
+private const val BLANK_ROW_INK_RATIO = 0.002
+
 class PreprocessResult internal constructor(
     private val variants: LinkedHashMap<BinarizationMethod, Mat>,
     /** زاویه‌ای که برای صاف‌کردن کجی اعمال شد (درجه، مثبت = پادساعتگرد). */
@@ -55,12 +61,121 @@ class PreprocessResult internal constructor(
      * صفحهٔ ۱۰ مگاپیکسلی حدود ۴۰ مگابایت از هیپ می‌گیرد و همیشه فقط یکی از آن‌ها
      * هم‌زمان زنده نگه داشته می‌شود.
      */
-    fun toBitmap(method: BinarizationMethod): Bitmap {
+    fun toBitmap(method: BinarizationMethod, rows: IntRange = 0 until height): Bitmap {
         check(!closed) { "PreprocessResult already closed" }
         val mat = requireNotNull(variants[method]) { "Unknown variant $method" }
-        val bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
-        Utils.matToBitmap(mat, bitmap)
-        return bitmap
+
+        val first = rows.first.coerceIn(0, mat.rows() - 1)
+        val last = rows.last.coerceIn(first, mat.rows() - 1)
+        val whole = first == 0 && last == mat.rows() - 1
+
+        // submat یک *نما* روی همان حافظه است و کپی نمی‌کند.
+        val region = if (whole) mat else mat.submat(first, last + 1, 0, mat.cols())
+        // کاشی‌های میانی حاشیهٔ سفیدِ تصویر اصلی را ندارند و Tesseract به حاشیه نیاز دارد.
+        val padded = if (whole) {
+            region
+        } else {
+            Mat().also {
+                Core.copyMakeBorder(
+                    region, it,
+                    BAND_MARGIN_PX, BAND_MARGIN_PX, 0, 0,
+                    Core.BORDER_CONSTANT, Scalar(255.0),
+                )
+            }
+        }
+
+        return try {
+            Bitmap.createBitmap(padded.cols(), padded.rows(), Bitmap.Config.ARGB_8888)
+                .also { Utils.matToBitmap(padded, it) }
+        } finally {
+            if (padded !== region) padded.release()
+            if (region !== mat) region.release()
+        }
+    }
+
+    /**
+     * تقسیمِ تصویر به نوارهای افقی که هرکدام حداکثر [maxPixelsPerBand] پیکسل دارند.
+     *
+     * ── چرا کاشی‌بندی، و چرا *افقی* ─────────────────────────────────────────
+     * وقتی بزرگ‌نمایی درست انجام شود، تصویر نهایی می‌تواند ده‌ها مگاپیکسل شود و یک
+     * Bitmapِ ARGB از آن صدها مگابایت می‌گیرد. راهِ درست، پایین‌آوردن کیفیت نیست؛
+     * راهِ درست این است که تصویر را تکه‌تکه به Tesseract بدهیم.
+     *
+     * برش فقط در **ردیف‌های خالی** انجام می‌شود (از روی نیم‌رخ افقیِ جوهر)، پس هیچ
+     * خطی از وسط دو نیم نمی‌شود و ترتیب خواندنِ راست‌به‌چپ هم دست‌نخورده می‌ماند.
+     * برشِ عمودی عمداً انجام نمی‌شود: خطِ فارسی را وسط کلمه قطع می‌کرد.
+     *
+     * @return فهرست بازه‌های سطر. اگر تصویر جا بگیرد، یک بازهٔ کامل برمی‌گردد.
+     */
+    fun bands(maxPixelsPerBand: Long): List<IntRange> {
+        check(!closed) { "PreprocessResult already closed" }
+        val whole = listOf(0 until height)
+        if (maxPixelsPerBand <= 0 || width <= 0) return whole
+
+        val maxRows = (maxPixelsPerBand / width).toInt()
+        if (maxRows <= 0 || maxRows >= height) return whole
+
+        val blank = blankRows() ?: return whole
+        val minRows = max(1, maxRows / 3)
+        val searchWindow = max(1, maxRows / 3)
+
+        val result = ArrayList<IntRange>()
+        var start = 0
+        while (start < height) {
+            val idealEnd = start + maxRows
+            if (idealEnd >= height) {
+                result += start until height
+                break
+            }
+            // به عقب برمی‌گردیم تا نزدیک‌ترین فاصلهٔ خالی پیش از مرزِ آرمانی را پیدا کنیم.
+            val cut = blankCut(blank, from = max(start + minRows, idealEnd - searchWindow), to = idealEnd)
+                ?: idealEnd
+            result += start until cut
+            start = cut
+        }
+
+        // نوارِ آخر اگر خیلی کوتاه شد، به قبلی می‌چسبد؛ یک نوارِ تک‌خطی برای
+        // تحلیل چیدمانِ Tesseract بدترین ورودی ممکن است.
+        if (result.size >= 2 && result.last().count() < minRows) {
+            val tail = result.removeAt(result.size - 1)
+            val previous = result.removeAt(result.size - 1)
+            result += previous.first..tail.last
+        }
+        return result
+    }
+
+    /** ردیف‌هایی که عملاً هیچ جوهری ندارند — مرزهای امنِ برش. */
+    private fun blankRows(): BooleanArray? = runCatching {
+        val reference = variants.values.first()
+        val inverted = Mat()
+        val sums = Mat()
+        try {
+            // متن تیره روی زمینهٔ روشن است؛ وارونه می‌کنیم تا «جوهر» مقدارِ بزرگ شود.
+            Core.bitwise_not(reference, inverted)
+            Core.reduce(inverted, sums, 1, Core.REDUCE_SUM, CvType.CV_32S)
+            val data = IntArray(reference.rows())
+            sums.get(0, 0, data)
+            // آستانهٔ سخاوتمندانه: چند پیکسل نویزِ پراکنده نباید یک ردیف را «پر» کند.
+            val threshold = (255.0 * reference.cols() * BLANK_ROW_INK_RATIO).toInt()
+            BooleanArray(data.size) { data[it] <= threshold }
+        } finally {
+            inverted.release()
+            sums.release()
+        }
+    }.getOrNull()
+
+    /** وسطِ آخرین دنبالهٔ ردیف‌های خالی در بازهٔ [from]..[to]، یا `null`. */
+    private fun blankCut(blank: BooleanArray, from: Int, to: Int): Int? {
+        var end = min(to, blank.size - 1)
+        while (end >= from) {
+            if (blank[end]) {
+                var begin = end
+                while (begin > from && blank[begin - 1]) begin--
+                return (begin + end) / 2
+            }
+            end--
+        }
+        return null
     }
 
     /** ساخت Bitmap برای نمایش، با کاهش مقیاس تا [maxDimension] برای صرفه‌جویی در حافظه. */
@@ -115,16 +230,18 @@ object ImagePreprocessor {
     private const val TAG = "Preprocess"
 
     /**
-     * بلندای هدف برای حروف بعد از بزرگ‌نمایی. Tesseract روی متنی با ارتفاع ۳۰ تا ۳۵ پیکسل
-     * (معادل چاپ ۱۰pt در ۳۰۰ DPI) بهترین عملکرد را دارد.
+     * بلندای هدف برای حروف پس از بزرگ‌نمایی.
+     *
+     * بازهٔ سالم ۲۰ تا ۳۰ پیکسل است؛ ۲۶ را وسطِ همین بازه می‌گیریم. اگر ارتفاع نهایی
+     * بیرون از این بازه بیفتد، در گزارش هشدار ثبت می‌شود — چون آن‌وقت ریشهٔ
+     * خطاهای بعدی (از جمله گم‌شدن فاصلهٔ بین کلمات) همین‌جاست.
      */
-    private const val TARGET_CHAR_HEIGHT_PX = 34.0
+    private const val TARGET_CHAR_HEIGHT_PX = 26.0
+    private const val MIN_HEALTHY_CHAR_HEIGHT_PX = 20.0
+    private const val MAX_HEALTHY_CHAR_HEIGHT_PX = 30.0
 
     /** بیشینهٔ ضریب بزرگ‌نمایی — فراتر از این، درون‌یابی فقط نویز می‌سازد. */
     private const val MAX_UPSCALE = 4.0
-
-    /** سقف تعداد پیکسل پس از بزرگ‌نمایی (کنترل مصرف حافظهٔ بومی). */
-    private const val MAX_WORKING_PIXELS = 10_000_000.0
 
     /** حاشیهٔ سفیدی که به تصویر نهایی اضافه می‌شود؛ Tesseract به حاشیه نیاز دارد. */
     private const val OUTPUT_MARGIN_PX = 24
@@ -141,6 +258,7 @@ object ImagePreprocessor {
      */
     fun process(
         source: Bitmap,
+        budget: WorkingMemoryBudget = WorkingMemoryBudget.CONSERVATIVE,
         onStep: (PreprocessStep) -> Unit = {},
     ): PreprocessResult {
         check(OpenCvBootstrap.ensureLoaded()) { "OpenCV is not loaded" }
@@ -150,6 +268,7 @@ object ImagePreprocessor {
             TAG,
             "ورودی: ${source.width}×${source.height} (${source.config}) • ${DiagnosticLog.heapSummary()}",
         )
+        DiagnosticLog.i(TAG, "بودجهٔ حافظه: ${budget.summary}")
 
         // زمان‌سنجِ ساده‌ای که مدتِ هر مرحله را جدا گزارش می‌کند؛ برای پیداکردن اینکه
         // کدام مرحله وقت می‌برد یا کجا کار خراب شده، دقیق‌ترین سرنخ است.
@@ -182,7 +301,7 @@ object ImagePreprocessor {
             // ── ۲) بزرگ‌نمایی تا ~۳۰۰ DPI ─────────────────────────────────────
             onStep(PreprocessStep.UPSCALE)
             val charHeightBefore = estimateCharHeight(gray)
-            val factor = computeUpscaleFactor(gray, charHeightBefore)
+            val factor = computeUpscaleFactor(gray, charHeightBefore, budget)
             upscaled = if (factor > 1.001) {
                 Mat().also {
                     Imgproc.resize(
@@ -369,7 +488,11 @@ object ImagePreprocessor {
         }
     }
 
-    private fun computeUpscaleFactor(gray: Mat, estimatedCharHeight: Double): Double {
+    private fun computeUpscaleFactor(
+        gray: Mat,
+        estimatedCharHeight: Double,
+        budget: WorkingMemoryBudget,
+    ): Double {
         val raw = if (estimatedCharHeight > 1.0) {
             TARGET_CHAR_HEIGHT_PX / estimatedCharHeight
         } else {
@@ -377,13 +500,36 @@ object ImagePreprocessor {
             1400.0 / max(1, min(gray.cols(), gray.rows()))
         }
         var factor = raw.coerceIn(1.0, MAX_UPSCALE)
-        // سقف حافظه: اگر بزرگ‌نمایی از حد بگذرد، ضریب را کم می‌کنیم.
+
+        // سقفِ حافظه، این بار بر پایهٔ حافظهٔ واقعیِ آزادِ دستگاه و نه یک عددِ ثابت.
+        // اگر باز هم محدود شد، *کیفیت را پایین نمی‌آوریم*: تصویر بزرگ می‌ماند و در
+        // مرحلهٔ OCR به نوارهای افقی کاشی‌بندی می‌شود (نگاه کنید به PreprocessResult.bands).
         val pixels = gray.cols().toDouble() * gray.rows()
-        val maxByMemory = sqrt(MAX_WORKING_PIXELS / pixels)
+        val maxByMemory = sqrt(budget.maxWorkingPixels / pixels)
         if (maxByMemory < factor) {
-            DiagnosticLog.d(TAG, "Clamping upscale $factor -> $maxByMemory (memory budget)")
+            DiagnosticLog.w(
+                TAG,
+                "بزرگ‌نمایی از ${fmt(factor)} به ${fmt(maxByMemory)} محدود شد" +
+                    " — تصویر کاری از بودجهٔ ${budget.maxWorkingPixels / 1_000_000} مگاپیکسلی فراتر می‌رفت.",
+            )
             factor = max(1.0, maxByMemory)
         }
+
+        val achieved = estimatedCharHeight * factor
+        val verdict = when {
+            estimatedCharHeight <= 1.0 -> "ارتفاع حروف تخمین زده نشد"
+            achieved < MIN_HEALTHY_CHAR_HEIGHT_PX ->
+                "⚠ ارتفاع نهایی حروف ${fmt(achieved, 1)}px است و از کفِ سالم" +
+                    " (${MIN_HEALTHY_CHAR_HEIGHT_PX.toInt()}px) کمتر — احتمال گم‌شدن فاصلهٔ بین کلمات"
+            achieved > MAX_HEALTHY_CHAR_HEIGHT_PX ->
+                "ارتفاع نهایی حروف ${fmt(achieved, 1)}px، کمی بالاتر از بازهٔ هدف"
+            else -> "ارتفاع نهایی حروف ${fmt(achieved, 1)}px — در بازهٔ هدف"
+        }
+        DiagnosticLog.i(
+            TAG,
+            "ضریب بزرگ‌نمایی ${fmt(factor)} (هدف ${TARGET_CHAR_HEIGHT_PX.toInt()}px" +
+                "، خام ${fmt(raw)}، سقف ${fmt(MAX_UPSCALE)}) • $verdict",
+        )
         return factor
     }
 

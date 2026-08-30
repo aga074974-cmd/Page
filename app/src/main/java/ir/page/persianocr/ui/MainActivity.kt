@@ -27,6 +27,7 @@ import ir.page.persianocr.databinding.ActivityMainBinding
 import ir.page.persianocr.image.BinarizationMethod
 import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.ocr.OcrResult
+import ir.page.persianocr.ocr.PageMode
 import ir.page.persianocr.util.BitmapIo
 import kotlinx.coroutines.launch
 
@@ -132,7 +133,21 @@ class MainActivity : AppCompatActivity() {
             }
 
             multiPassSwitch.setOnCheckedChangeListener { _, checked -> viewModel.onMultiPassChanged(checked) }
-            singleBlockSwitch.setOnCheckedChangeListener { _, checked -> viewModel.onSingleBlockChanged(checked) }
+
+            pageModeSpinner.adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                PageMode.entries.map { it.label },
+            ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+
+            pageModeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    if (bindingSpinner) return
+                    viewModel.onPageModeSelected(PageMode.entries[position])
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
 
             runOcrButton.setOnClickListener { viewModel.onRunOcr() }
             cancelButton.setOnClickListener { viewModel.onCancel() }
@@ -196,8 +211,12 @@ class MainActivity : AppCompatActivity() {
                 bindingSpinner = false
             }
             if (multiPassSwitch.isChecked != state.multiPass) multiPassSwitch.isChecked = state.multiPass
-            if (singleBlockSwitch.isChecked != state.singleBlockMode) {
-                singleBlockSwitch.isChecked = state.singleBlockMode
+
+            val pageModeIndex = PageMode.entries.indexOf(state.pageMode)
+            if (pageModeSpinner.selectedItemPosition != pageModeIndex) {
+                bindingSpinner = true
+                pageModeSpinner.setSelection(pageModeIndex)
+                bindingSpinner = false
             }
 
             val idle = !state.busy
@@ -208,7 +227,7 @@ class MainActivity : AppCompatActivity() {
             runOcrButton.isEnabled = idle
             variantSpinner.isEnabled = idle
             multiPassSwitch.isEnabled = idle
-            singleBlockSwitch.isEnabled = idle
+            pageModeSpinner.isEnabled = idle
 
             // ── نوار پیشرفت ─────────────────────────────────────────────────
             progressContainer.isVisible(state.busy)
@@ -223,7 +242,7 @@ class MainActivity : AppCompatActivity() {
             val result = state.result
             if (result !== appliedResult) {
                 appliedResult = result
-                resultText.setText(result?.best?.text.orEmpty())
+                resultText.setText(result?.text.orEmpty())
                 resultStats.text = result?.let { statsLine(it) }.orEmpty()
             }
 
@@ -237,13 +256,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun statsLine(result: OcrResult): String {
-        val confidence = getString(
-            R.string.label_confidence,
-            result.best.meanConfidence,
-            result.best.method.label,
-        )
+        val vote = result.vote
+        val headline = if (vote == null) {
+            getString(R.string.label_confidence, result.best.meanConfidence, result.best.method.label)
+        } else {
+            // در حالت چندگذره هیچ حالتی «برنده» نیست؛ گفتنِ نامِ یک حالت گمراه‌کننده
+            // می‌شد. به‌جایش می‌گوییم متن از رأی‌گیری چند حالت ساخته شده.
+            getString(R.string.label_voted, vote.variantCount, vote.acceptedLines.size)
+        }
         val elapsed = getString(R.string.label_elapsed, result.elapsedMillis / 1000f)
-        return "$confidence\n$elapsed"
+        return "$headline\n$elapsed"
     }
 
     private fun showError(error: UiError) {

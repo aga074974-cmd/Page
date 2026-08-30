@@ -11,11 +11,12 @@ import ir.page.persianocr.image.ImagePreprocessor
 import ir.page.persianocr.image.OpenCvBootstrap
 import ir.page.persianocr.image.PreprocessResult
 import ir.page.persianocr.image.PreprocessStep
+import ir.page.persianocr.image.WorkingMemoryBudget
 import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.ocr.MissingTessDataException
 import ir.page.persianocr.ocr.OcrPhase
 import ir.page.persianocr.ocr.OcrRepository
-import ir.page.persianocr.ocr.TesseractEngine
+import ir.page.persianocr.ocr.PageMode
 import ir.page.persianocr.ocr.TesseractInitException
 import ir.page.persianocr.util.BitmapIo
 import kotlinx.coroutines.CancellationException
@@ -124,8 +125,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var produced: PreprocessResult? = null
             try {
                 releasePreprocessed()
+                val budget = WorkingMemoryBudget.forDevice(getApplication())
                 withContext(Dispatchers.Default) {
-                    produced = ImagePreprocessor.process(source) { step ->
+                    produced = ImagePreprocessor.process(source, budget) { step ->
                         _uiState.update {
                             it.copy(statusRes = stepLabel(step), progressPercent = stepProgress(step))
                         }
@@ -180,9 +182,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(multiPass = enabled) }
     }
 
-    fun onSingleBlockChanged(enabled: Boolean) {
-        DiagnosticLog.d(TAG, "حالت تک‌بلوک: $enabled")
-        _uiState.update { it.copy(singleBlockMode = enabled) }
+    fun onPageModeSelected(mode: PageMode) {
+        if (_uiState.value.pageMode == mode) return
+        DiagnosticLog.d(TAG, "حالت قطعه‌بندی صفحه: ${mode.name} (PSM=${mode.psm})")
+        _uiState.update { it.copy(pageMode = mode) }
     }
 
     // ──────────────────────────── اجرای OCR ────────────────────────────
@@ -193,11 +196,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runningJob = viewModelScope.launch {
             val state = _uiState.value
             val methods = if (state.multiPass) result.methods else listOf(state.selectedMethod)
-            val pageSegMode = if (state.singleBlockMode) {
-                TesseractEngine.PSM_SINGLE_BLOCK
-            } else {
-                TesseractEngine.PSM_AUTO
-            }
+            val budget = WorkingMemoryBudget.forDevice(getApplication())
 
             _uiState.update {
                 it.copy(busy = true, progressPercent = 0, statusRes = R.string.status_init_engine, error = null)
@@ -206,7 +205,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val ocr = repository.recognise(
                     preprocessed = result,
                     methods = methods,
-                    pageSegMode = pageSegMode,
+                    pageMode = state.pageMode,
+                    maxBitmapPixels = budget.maxOcrBitmapPixels,
                 ) { progress ->
                     _uiState.update {
                         it.copy(
@@ -224,7 +224,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         progressPercent = null,
                         statusRes = R.string.status_done,
                         statusArg = null,
-                        message = if (ocr.best.text.isBlank()) {
+                        message = if (ocr.text.isBlank()) {
                             UiMessage(R.string.msg_empty_result)
                         } else {
                             null
@@ -257,7 +257,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { previous ->
             MainUiState(
                 multiPass = previous.multiPass,
-                singleBlockMode = previous.singleBlockMode,
+                pageMode = previous.pageMode,
                 selectedMethod = previous.selectedMethod,
             )
         }
@@ -310,6 +310,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         OcrPhase.INSTALLING_DATA -> R.string.status_copying_data
         OcrPhase.INITIALISING -> R.string.status_init_engine
         OcrPhase.RECOGNISING -> R.string.status_ocr
+        OcrPhase.VOTING -> R.string.status_voting
         OcrPhase.POSTPROCESSING -> R.string.status_postprocess
     }
 
@@ -318,7 +319,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         append("اندازهٔ نهایی: ${result.width}×${result.height}")
         append(" • بزرگ‌نمایی: ×${"%.2f".format(result.upscaleFactor)}")
         append(" • چرخش: ${"%.2f".format(result.deskewAngleDegrees)}°")
-        append(" • ارتفاع تخمینی حروف: ${result.estimatedCharHeightPx.toInt()}px")
+        append(" • ارتفاع حروف: ${result.estimatedCharHeightPx.toInt()}px")
+        // ارتفاع حروف مستقیم‌ترین پیش‌بینی‌کنندهٔ دقت است؛ اگر کم باشد کاربر باید
+        // همان‌جا بداند، نه بعد از دیدن خروجیِ بد.
+        if (result.estimatedCharHeightPx < 20) append(" ⚠ کم است؛ ناحیهٔ کوچک‌تری برش بزنید")
     }
 
     private fun cancelRunning() {

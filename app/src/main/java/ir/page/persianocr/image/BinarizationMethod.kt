@@ -4,9 +4,11 @@ package ir.page.persianocr.image
  * حالت‌های باینری‌سازی که خط لوله تولید می‌کند.
  *
  * چون دقت اولویت مطلق است، به‌جای انتخاب یک روش، همهٔ این حالت‌ها ساخته می‌شوند و
- * (در حالت چندگذره) OCR روی همه اجرا شده و بهترین خروجی انتخاب می‌شود.
+ * (در حالت چندگذره) OCR روی همه اجرا می‌شود. متن نهایی از **رأی‌گیری خط‌به‌خط**
+ * بین همین حالت‌ها ساخته می‌شود — نه از انتخابِ یکی از آن‌ها به‌عنوان برنده.
  *
- * The pipeline produces every variant; multi-pass OCR then keeps the best output.
+ * The pipeline produces every variant; the final text comes from line-level voting
+ * across them (see LineVoter), not from picking one winning variant.
  */
 enum class BinarizationMethod(
     /** برچسب فارسی برای نمایش در UI */

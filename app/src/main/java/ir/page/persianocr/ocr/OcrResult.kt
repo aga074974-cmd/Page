@@ -11,68 +11,66 @@ data class OcrCandidate(
     val text: String,
     /** میانگین اطمینان Tesseract (۰ تا ۱۰۰). */
     val meanConfidence: Int,
-    /** امتیاز ترکیبی که برای انتخاب بهترین خروجی استفاده می‌شود. */
+    /** تعداد کلماتی که اطمینانشان از [OcrLine.STRONG_WORD_CONFIDENCE] بیشتر است. */
+    val strongWordCount: Int,
+    val wordCount: Int,
+    val lineCount: Int,
+    /** امتیاز این حالت — رجوع کنید به [OcrCandidateScorer]. */
     val score: Double,
 )
 
 /** نتیجهٔ نهایی یک اجرای کامل. */
 data class OcrResult(
+    /**
+     * متنِ تحویل‌شده به کاربر.
+     *
+     * در حالت چندگذره این متن حاصلِ **رأی‌گیری خط‌به‌خط** بین همهٔ حالت‌هاست، نه
+     * خروجیِ دست‌نخوردهٔ یک حالتِ برنده.
+     */
+    val text: String,
+    /** پرامتیازترین حالتِ منفرد — فقط برای نمایش آمار و مقایسه در گزارش. */
     val best: OcrCandidate,
-    /** همهٔ نامزدها به ترتیب نزولیِ امتیاز (در حالت تک‌گذره فقط یک عضو دارد). */
+    /** همهٔ نامزدها به ترتیب نزولیِ امتیاز. */
     val candidates: List<OcrCandidate>,
+    /** جزئیات رأی‌گیری؛ در حالت تک‌گذره `null` است. */
+    val vote: VoteResult? = null,
     val elapsedMillis: Long,
 )
 
 /**
- * امتیازدهی به نامزدها.
+ * امتیازدهی به یک حالتِ باینری‌سازی *به‌عنوان یک کل*.
  *
- * تکیهٔ صرف به `meanConfidence` کافی نیست: Tesseract گاهی به یک خروجیِ کوتاه و
- * پرت اطمینان بالایی می‌دهد. بنابراین اطمینان را با سه سیگنالِ ساختاری ترکیب می‌کنیم:
+ * ── چرا فرمول قبلی حذف شد ────────────────────────────────────────────────────
+ * فرمول قبلی وزن سنگینی به `meanConfidence` می‌داد و آن را با نسبت‌های ساختاری
+ * (سهم حروف فارسی، سهم کاراکترهای آشغال، طول نسبی) ترکیب می‌کرد. مشکل بنیادی‌اش
+ * این بود که **میانگینِ اطمینان، حذفِ متن را پاداش می‌دهد**: وقتی یک حالت یک خطِ
+ * سختِ متن را کامل جا می‌اندازد، کاراکترهای باقی‌مانده تمیزترند و میانگین بالا
+ * می‌رود. در عمل SAUVOLA با اطمینان ۸۸ و ۱۲۶۰ کاراکتر برندهٔ OTSU با اطمینان ۸۴ و
+ * ۱۳۵۹ کاراکتر شد — در حالی که یک خطِ کامل را انداخته بود.
  *
- *  • نسبت حروف فارسی/عربی — خروجیِ درست باید عمدتاً فارسی باشد.
- *  • نسبت کاراکترهای «آشغال» — نمادهایی که در متن فارسی جایی ندارند.
- *  • طول نسبی — خروجی‌ای که نصف بقیه است، احتمالاً بخشی از متن را جا انداخته.
+ * ── فرمول تازه ───────────────────────────────────────────────────────────────
+ *     score = میانگین‌اطمینان × تعدادِ کلماتِ با اطمینانِ بالای ۶۰
  *
- * Confidence alone is a poor selector; these structural signals catch the cases where
- * Tesseract is confidently wrong.
+ * ضربِ کیفیت در **کمیتِ کلماتِ قابل‌اعتماد** یعنی متنِ کوتاه‌شده دیگر پاداش نمی‌گیرد:
+ * حذفِ یک خط، شمارندهٔ کلمات را پایین می‌آورد و کاهشِ آن بر افزایشِ چند واحدی
+ * اطمینان می‌چربد.
+ *
+ * ⚠ این امتیاز دیگر **تعیین‌کنندهٔ متنِ نهایی نیست** — آن کار با [LineVoter] و
+ * رأی‌گیری خط‌به‌خط انجام می‌شود. این عدد فقط برای رتبه‌بندی در گزارش و برای حالتِ
+ * تک‌گذره (وقتی کاربر چندگذره را خاموش کرده) استفاده می‌شود.
  */
 object OcrCandidateScorer {
 
-    private const val WEIGHT_CONFIDENCE = 1.0
-    private const val WEIGHT_PERSIAN_RATIO = 25.0
-    private const val WEIGHT_GARBAGE_RATIO = 45.0
-    private const val WEIGHT_LENGTH = 20.0
-
-    /** حروف و ارقام فارسی/عربی. */
-    private fun isPersianLetter(ch: Char): Boolean = ch in 'ء'..'ۿ'
-
-    /** کاراکترهایی که در یک متن فارسیِ سالم انتظار می‌رود. */
-    private fun isExpected(ch: Char): Boolean = when {
-        ch.isWhitespace() -> true
-        isPersianLetter(ch) -> true
-        ch.isLetterOrDigit() -> true // لاتین و ارقام هم طبیعی‌اند
-        ch in "‌.,;:!?()[]{}«»\"'/\\-–—_%+=*&@#…،؛؟٪" -> true
-        else -> false
-    }
-
     /**
-     * @param maxLength بلندترین طول میان همهٔ نامزدها (برای نرمال‌سازی سیگنال طول).
+     * @param meanConfidence میانگین اطمینان Tesseract (۰ تا ۱۰۰).
+     * @param strongWordCount تعداد کلماتِ با اطمینانِ بالای آستانه.
+     * @param wordCount کلِ کلمات — فقط وقتی استفاده می‌شود که داده‌های سطحِ کلمه در
+     *   دسترس نباشد (مثلاً وقتی `ResultIterator` چیزی برنگرداند) و آن‌گاه
+     *   [strongWordCount] برای همهٔ حالت‌ها صفر است و تمایزی ایجاد نمی‌کند.
      */
-    fun score(text: String, meanConfidence: Int, maxLength: Int): Double {
-        val meaningful = text.filterNot { it.isWhitespace() }
-        if (meaningful.isEmpty()) return 0.0
-
-        val persianRatio = meaningful.count(::isPersianLetter).toDouble() / meaningful.length
-        val garbageRatio = meaningful.count { !isExpected(it) }.toDouble() / meaningful.length
-        val lengthRatio = if (maxLength > 0) {
-            (meaningful.length.toDouble() / maxLength).coerceAtMost(1.0)
-        } else {
-            0.0
-        }
-
-        return WEIGHT_CONFIDENCE * meanConfidence +
-            WEIGHT_PERSIAN_RATIO * persianRatio -
-            WEIGHT_GARBAGE_RATIO * garbageRatio +
-            WEIGHT_LENGTH * lengthRatio
+    fun score(meanConfidence: Int, strongWordCount: Int, wordCount: Int): Double {
+        val completeness = if (strongWordCount > 0) strongWordCount else wordCount
+        if (completeness <= 0) return 0.0
+        return meanConfidence.toDouble() * completeness
     }
 }

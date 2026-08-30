@@ -28,8 +28,10 @@
     <string name="hint_result">متن قابل انتخاب و کپی است.</string>
     <string name="label_variant">حالت باینری‌سازی نمایش‌داده‌شده:</string>
     <string name="label_multi_pass">اجرای OCR روی همهٔ حالت‌های باینری‌سازی و انتخاب بهترین خروجی (دقیق‌تر، کندتر)</string>
-    <string name="label_single_block">حالت «تک‌بلوک» برای متن پاراگرافیِ یکدست (PSM_SINGLE_BLOCK)</string>
+    <string name="label_page_mode">حالت قطعه‌بندی صفحه:</string>
+    <string name="hint_page_mode">برای عکسِ یک پاراگراف یا صفحهٔ کتاب، «بلوک یکپارچه» را نگه دارید. «تشخیص خودکار» فقط برای صفحه‌های چندستونی مناسب است و روی متن پیوسته، ترتیب خطوط و فاصلهٔ بین کلمات را خراب می‌کند.</string>
     <string name="label_confidence">میانگین اطمینان: %1$d%% • حالت برگزیده: %2$s</string>
+    <string name="label_voted">متن از رأی‌گیری %1$d حالت باینری‌سازی ساخته شد • %2$d خط پذیرفته‌شده</string>
     <string name="label_elapsed">زمان پردازش: %1$.1f ثانیه</string>
 
     <!-- وضعیت‌ها -->
@@ -44,6 +46,7 @@
     <string name="status_preprocess_binarize">باینری‌سازی…</string>
     <string name="status_preprocess_morph">اصلاح مورفولوژیک…</string>
     <string name="status_ocr">تشخیص متن (%1$s)…</string>
+    <string name="status_voting">رأی‌گیری خط‌به‌خط بین حالت‌ها…</string>
     <string name="status_postprocess">پس‌پردازش متن فارسی…</string>
     <string name="status_done">انجام شد.</string>
 

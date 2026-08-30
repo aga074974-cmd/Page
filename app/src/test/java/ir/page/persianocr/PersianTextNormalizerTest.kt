@@ -117,4 +117,42 @@ class PersianTextNormalizerTest {
         assertFalse(output.contains('ﻻ'))
         assertTrue(output.contains("لا"))
     }
+
+    // ── نگهبان‌های نیم‌فاصله ─────────────────────────────────────────────────
+    // این آزمون‌ها رفتاری را میخکوب می‌کنند که باید *اتفاق نیفتد*: چسباندنِ واژه‌های
+    // مستقل به واژهٔ پیشین. در گزارش‌ها «خدماترا» و «فروشو» دیده شده بود؛ آن‌ها از
+    // خروجی خام Tesseract می‌آیند، نه از اینجا — و این آزمون‌ها تضمین می‌کنند که
+    // هرگز از اینجا هم نیایند.
+
+    @Test
+    fun `object marker ra is never glued to the previous word`() {
+        assertEquals("بهترین خدمات را", PersianTextNormalizer.normalise("بهترین خدمات را"))
+    }
+
+    @Test
+    fun `conjunction and relative pronoun are never glued`() {
+        assertEquals("فروش و بازاریابی", PersianTextNormalizer.normalise("فروش و بازاریابی"))
+        assertEquals("کتابی که خواندم", PersianTextNormalizer.normalise("کتابی که خواندم"))
+    }
+
+    @Test
+    fun `common prepositions are never glued`() {
+        val input = "کتاب در قفسه به دوست از راه با هم"
+        assertEquals(input, PersianTextNormalizer.normalise(input))
+    }
+
+    @Test
+    fun `a function word never takes a suffix`() {
+        // بدون نگهبان، الگو «که» را یک واژهٔ دوحرفی می‌دید و «که‌تر» می‌ساخت.
+        assertEquals("که تر", PersianTextNormalizer.normalise("که تر"))
+        assertEquals("این ها", PersianTextNormalizer.normalise("این ها"))
+    }
+
+    @Test
+    fun `indefinite ey attaches only after a word ending in heh`() {
+        assertEquals("خانه\u200Cای", PersianTextNormalizer.normalise("خانه ای"))
+        // «ای» ندایی پیش از یک اسم باید دست‌نخورده بماند.
+        assertEquals("ای دوست", PersianTextNormalizer.normalise("ای دوست"))
+        assertEquals("کتاب ای", PersianTextNormalizer.normalise("کتاب ای"))
+    }
 }
