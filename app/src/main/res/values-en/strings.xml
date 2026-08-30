@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Persian OCR</string>
+
+    <string name="step_pick">1) Pick an image</string>
+    <string name="step_crop">2) Crop the text area</string>
+    <string name="step_preprocess">3) Preprocessing</string>
+    <string name="step_result">4) Extracted text</string>
+
+    <string name="btn_gallery">Pick from gallery</string>
+    <string name="btn_camera">Take a photo</string>
+    <string name="btn_crop_confirm">Crop &amp; preprocess</string>
+    <string name="btn_crop_reset">Reset crop box</string>
+    <string name="btn_run_ocr">Run OCR</string>
+    <string name="btn_copy">Copy to clipboard</string>
+    <string name="btn_share">Share</string>
+    <string name="btn_restart">Start over</string>
+
+    <string name="hint_crop">Drag the handles so only the text area is selected.</string>
+    <string name="hint_preprocessed">Preprocessed image — adjust the crop if the quality looks poor.</string>
+    <string name="hint_result">The text is selectable and copyable.</string>
+    <string name="label_variant">Binarization variant shown:</string>
+    <string name="label_multi_pass">Run OCR on every binarization variant and keep the best (more accurate, slower)</string>
+    <string name="label_single_block">Single-block mode for uniform paragraph text (PSM_SINGLE_BLOCK)</string>
+    <string name="label_confidence">Mean confidence: %1$d%% • winning variant: %2$s</string>
+    <string name="label_elapsed">Processing time: %1$.1f s</string>
+
+    <string name="status_idle">Pick an image to start.</string>
+    <string name="status_loading_image">Loading image…</string>
+    <string name="status_init_engine">Preparing the OCR engine…</string>
+    <string name="status_copying_data">Copying language data (first run only)…</string>
+    <string name="status_preprocess_gray">Converting to grayscale…</string>
+    <string name="status_preprocess_upscale">Upscaling towards ~300 DPI…</string>
+    <string name="status_preprocess_denoise">Denoising…</string>
+    <string name="status_preprocess_deskew">Deskewing…</string>
+    <string name="status_preprocess_binarize">Binarizing…</string>
+    <string name="status_preprocess_morph">Morphological cleanup…</string>
+    <string name="status_ocr">Recognizing text (%1$s)…</string>
+    <string name="status_postprocess">Persian text post-processing…</string>
+    <string name="status_done">Done.</string>
+
+    <string name="msg_copied">Text copied to clipboard.</string>
+    <string name="msg_empty_result">No text was recognised. Try a tighter crop or a sharper photo.</string>
+    <string name="msg_share_title">Share text</string>
+
+    <string name="err_opencv">Failed to load OpenCV. Make sure the OpenCV library is on the classpath and built for this device ABI.</string>
+    <string name="err_tess_init">Tesseract initialisation failed. Put fas.traineddata and ara.traineddata into assets/tessdata/ and reinstall the app.</string>
+    <string name="err_tessdata_missing">Language files missing from assets/tessdata/: %1$s</string>
+    <string name="err_image_load">Could not read the image.</string>
+    <string name="err_preprocess">Preprocessing failed: %1$s</string>
+    <string name="err_ocr">OCR failed: %1$s</string>
+    <string name="err_no_camera">No camera app was found on this device.</string>
+    <string name="err_out_of_memory">Not enough memory. Crop a smaller area.</string>
+
+    <string name="cd_source_image">Selected image for cropping</string>
+    <string name="cd_preprocessed_image">Preprocessed image</string>
+</resources>

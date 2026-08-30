@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    زبان پیش‌فرض اپ فارسی است؛ ترجمهٔ انگلیسی در values-en قرار دارد.
+    Default locale strings are Persian; English lives in values-en.
+-->
+<resources>
+    <string name="app_name">متن‌یاب فارسی</string>
+
+    <!-- مراحل -->
+    <string name="step_pick">۱) انتخاب تصویر</string>
+    <string name="step_crop">۲) برش ناحیهٔ متن</string>
+    <string name="step_preprocess">۳) پیش‌پردازش</string>
+    <string name="step_result">۴) متن استخراج‌شده</string>
+
+    <!-- دکمه‌ها -->
+    <string name="btn_gallery">انتخاب از گالری</string>
+    <string name="btn_camera">گرفتن عکس</string>
+    <string name="btn_crop_confirm">تأیید برش و پیش‌پردازش</string>
+    <string name="btn_crop_reset">بازنشانی کادر برش</string>
+    <string name="btn_run_ocr">اجرای OCR</string>
+    <string name="btn_copy">کپی به کلیپ‌بورد</string>
+    <string name="btn_share">اشتراک‌گذاری</string>
+    <string name="btn_restart">شروع دوباره</string>
+
+    <!-- توضیحات -->
+    <string name="hint_crop">گوشه‌های کادر را بکشید تا فقط ناحیهٔ متن انتخاب شود.</string>
+    <string name="hint_preprocessed">تصویر پیش‌پردازش‌شده — اگر کیفیت مناسب نیست، برش را اصلاح کنید.</string>
+    <string name="hint_result">متن قابل انتخاب و کپی است.</string>
+    <string name="label_variant">حالت باینری‌سازی نمایش‌داده‌شده:</string>
+    <string name="label_multi_pass">اجرای OCR روی همهٔ حالت‌های باینری‌سازی و انتخاب بهترین خروجی (دقیق‌تر، کندتر)</string>
+    <string name="label_single_block">حالت «تک‌بلوک» برای متن پاراگرافیِ یکدست (PSM_SINGLE_BLOCK)</string>
+    <string name="label_confidence">میانگین اطمینان: %1$d%% • حالت برگزیده: %2$s</string>
+    <string name="label_elapsed">زمان پردازش: %1$.1f ثانیه</string>
+
+    <!-- وضعیت‌ها -->
+    <string name="status_idle">برای شروع، یک تصویر انتخاب کنید.</string>
+    <string name="status_loading_image">در حال بارگذاری تصویر…</string>
+    <string name="status_init_engine">در حال آماده‌سازی موتور OCR…</string>
+    <string name="status_copying_data">در حال کپی داده‌های زبان (فقط بار اول)…</string>
+    <string name="status_preprocess_gray">تبدیل به خاکستری…</string>
+    <string name="status_preprocess_upscale">بزرگ‌نمایی تا حدود ۳۰۰ DPI…</string>
+    <string name="status_preprocess_denoise">کاهش نویز…</string>
+    <string name="status_preprocess_deskew">صاف‌کردن کجی صفحه…</string>
+    <string name="status_preprocess_binarize">باینری‌سازی…</string>
+    <string name="status_preprocess_morph">اصلاح مورفولوژیک…</string>
+    <string name="status_ocr">تشخیص متن (%1$s)…</string>
+    <string name="status_postprocess">پس‌پردازش متن فارسی…</string>
+    <string name="status_done">انجام شد.</string>
+
+    <!-- پیام‌ها -->
+    <string name="msg_copied">متن در کلیپ‌بورد کپی شد.</string>
+    <string name="msg_empty_result">متنی تشخیص داده نشد. برش دقیق‌تر یا تصویر باکیفیت‌تر را امتحان کنید.</string>
+    <string name="msg_share_title">اشتراک‌گذاری متن</string>
+
+    <!-- خطاها -->
+    <string name="err_opencv">بارگذاری OpenCV ناموفق بود. مطمئن شوید کتابخانهٔ OpenCV به پروژه افزوده شده و برای معماری این دستگاه ساخته شده است.</string>
+    <string name="err_tess_init">مقداردهی اولیهٔ Tesseract ناموفق بود. فایل‌های fas.traineddata و ara.traineddata را در assets/tessdata/ قرار دهید و اپ را دوباره نصب کنید.</string>
+    <string name="err_tessdata_missing">فایل‌های زبان در assets/tessdata/ پیدا نشد: %1$s</string>
+    <string name="err_image_load">خواندن تصویر ممکن نشد.</string>
+    <string name="err_preprocess">پیش‌پردازش تصویر با خطا مواجه شد: %1$s</string>
+    <string name="err_ocr">اجرای OCR با خطا مواجه شد: %1$s</string>
+    <string name="err_no_camera">اپ دوربینی روی این دستگاه یافت نشد.</string>
+    <string name="err_out_of_memory">حافظه کافی نیست. ناحیهٔ کوچک‌تری را برش بزنید.</string>
+
+    <!-- توضیح تصویر برای دسترس‌پذیری -->
+    <string name="cd_source_image">تصویر انتخاب‌شده برای برش</string>
+    <string name="cd_preprocessed_image">تصویر پیش‌پردازش‌شده</string>
+</resources>

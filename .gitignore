@@ -1,0 +1,21 @@
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+build/
+
+# فایل‌های زبان Tesseract حجیم‌اند و در مخزن نگه‌داری نمی‌شوند.
+# آن‌ها را با scripts/fetch-tessdata.sh دریافت کنید. (به README نگاه کنید)
+app/src/main/assets/tessdata/*.traineddata
+
+# Keystore
+*.jks
+*.keystore

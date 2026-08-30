@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.PersianOcr" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorPrimaryDark">@color/brand_primary_dark</item>
+        <item name="colorSecondary">@color/brand_secondary</item>
+        <item name="android:statusBarColor" tools:targetApi="21">@color/brand_primary_dark</item>
+        <!-- کل رابط کاربری راست‌به‌چپ است -->
+        <item name="android:layoutDirection">rtl</item>
+        <item name="android:textDirection">anyRtl</item>
+    </style>
+
+    <style name="SectionTitle" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textStyle">bold</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">4dp</item>
+    </style>
+
+    <style name="SectionHint" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:alpha">0.75</item>
+        <item name="android:layout_marginBottom">8dp</item>
+    </style>
+</resources>

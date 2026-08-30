@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#FF1B5E7E</color>
+    <color name="brand_primary_dark">#FF0E3B52</color>
+    <color name="brand_secondary">#FF2E9E8F</color>
+    <color name="surface_muted">#FFF3F5F7</color>
+    <color name="crop_scrim">#99000000</color>
+    <color name="crop_stroke">#FFFFFFFF</color>
+    <color name="crop_handle">#FF2E9E8F</color>
+    <color name="crop_grid">#66FFFFFF</color>
+</resources>
