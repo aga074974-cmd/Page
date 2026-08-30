@@ -94,6 +94,21 @@ class PreprocessResult internal constructor(
     }
 
     /**
+     * فاصلهٔ عمودیِ ابتدای Bitmapِ یک کاشی از بالای تصویرِ کامل.
+     *
+     * برای کاشی‌های میانی، [toBitmap] یک حاشیهٔ سفید به بالا اضافه می‌کند؛ پس
+     * ردیفِ صفرِ آن Bitmap در واقع `rows.first - BAND_MARGIN_PX` تصویرِ اصلی است.
+     * مختصاتی که Tesseract برمی‌گرداند نسبت به همان Bitmap است، بنابراین برای
+     * مقایسهٔ خطوطِ کاشی‌های مختلف باید این عدد به آن‌ها اضافه شود.
+     */
+    fun bandYOffset(rows: IntRange): Int {
+        val first = rows.first.coerceIn(0, (height - 1).coerceAtLeast(0))
+        val last = rows.last.coerceIn(first, (height - 1).coerceAtLeast(0))
+        val whole = first == 0 && last == height - 1
+        return if (whole) 0 else first - BAND_MARGIN_PX
+    }
+
+    /**
      * تقسیمِ تصویر به نوارهای افقی که هرکدام حداکثر [maxPixelsPerBand] پیکسل دارند.
      *
      * ── چرا کاشی‌بندی، و چرا *افقی* ─────────────────────────────────────────

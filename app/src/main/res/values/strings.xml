@@ -91,4 +91,6 @@
     <string name="err_log_save">ذخیرهٔ گزارش ممکن نشد: %1$s</string>
     <string name="err_log_share">ارسال گزارش ممکن نشد: %1$s</string>
     <string name="cd_back">بازگشت</string>
+    <string name="label_lexicon_correction">اصلاح واژگانی (آزمایشی)</string>
+    <string name="hint_lexicon_correction">خطاهای همیشگیِ حروفِ هم‌شکل را با فرهنگِ واژگانِ فارسی اصلاح می‌کند: نکرش ← نگرش، همجنین ← همچنین، انرزی ← انرژی. فقط وقتی جایگزینِ یکتا و مطمئن وجود داشته باشد دست به تغییر می‌زند.</string>
 </resources>

@@ -1,6 +1,7 @@
 package ir.page.persianocr.ocr
 
 import android.graphics.Bitmap
+import com.googlecode.tesseract.android.ResultIterator
 import com.googlecode.tesseract.android.TessBaseAPI
 import ir.page.persianocr.log.DiagnosticLog
 import java.io.Closeable
@@ -26,10 +27,28 @@ data class OcrLine(
     val wordCount: Int = 0,
     /** تعداد کلماتی که اطمینانشان از [STRONG_WORD_CONFIDENCE] بیشتر است. */
     val strongWordCount: Int = 0,
+    /**
+     * لبهٔ بالای کادرِ محصورِ خط، در مختصاتِ **تصویرِ کاملِ پیش‌پردازش‌شده** (نه کاشی).
+     * [NO_GEOMETRY] یعنی Tesseract مختصات نداد و باید به ترازِ متنی برگردیم.
+     */
+    val top: Int = NO_GEOMETRY,
+    /** لبهٔ پایینِ کادرِ محصور، در همان مختصات. */
+    val bottom: Int = NO_GEOMETRY,
 ) {
+    /** آیا مختصاتِ معتبری داریم که بشود بر اساسش خطوط را گروه و مرتب کرد؟ */
+    val hasGeometry: Boolean get() = top != NO_GEOMETRY && bottom > top
+
+    /** مرکز عمودیِ خط — کلیدِ اصلیِ مرتب‌سازی. */
+    val centerY: Int get() = (top + bottom) / 2
+
+    val heightPx: Int get() = (bottom - top).coerceAtLeast(1)
+
     companion object {
         /** آستانهٔ «کلمهٔ قابل‌اعتماد». */
         const val STRONG_WORD_CONFIDENCE = 60
+
+        /** نشانهٔ «مختصات در دسترس نیست». */
+        const val NO_GEOMETRY = -1
     }
 }
 
@@ -188,10 +207,16 @@ class TesseractEngine : Closeable {
      * Tesseract از روی [bitmap] یک کپیِ داخلی (Pix) می‌سازد، بنابراین فراخوان می‌تواند
      * بلافاصله پس از بازگشتِ این تابع `recycle()` را صدا بزند.
      */
+    /**
+     * @param yOffset فاصلهٔ عمودیِ این کاشی از بالای تصویرِ کامل. مختصاتی که
+     *   Tesseract می‌دهد نسبت به *همین Bitmap* است؛ با افزودن این عدد به مختصاتِ
+     *   سراسری تبدیل می‌شود تا خطوطِ کاشی‌های مختلف با هم قابل‌مقایسه باشند.
+     */
     fun recognise(
         bitmap: Bitmap,
         pageSegMode: Int = PageMode.DEFAULT.psm,
         dpi: Int = 300,
+        yOffset: Int = 0,
         onProgress: (Int) -> Unit = {},
     ): RawOcrOutput {
         val instance = api ?: throw IllegalStateException("Engine not initialised")
@@ -216,7 +241,7 @@ class TesseractEngine : Closeable {
             instance.getHOCRText(0)
             val text = instance.getUTF8Text().orEmpty()
             val confidence = runCatching { instance.meanConfidence() }.getOrDefault(0)
-            val lines = readLines(instance, text)
+            val lines = readLines(instance, text, yOffset)
             val output = RawOcrOutput(text, confidence.coerceIn(0, 100), lines)
             DiagnosticLog.d(
                 TAG,
@@ -249,12 +274,12 @@ class TesseractEngine : Closeable {
      * اگر iterator در دسترس نباشد، به شکستنِ سادهٔ [fallbackText] برمی‌گردیم تا
      * رأی‌گیری خط‌به‌خط در هر شرایطی کار کند.
      */
-    private fun readLines(instance: TessBaseAPI, fallbackText: String): List<OcrLine> {
+    private fun readLines(instance: TessBaseAPI, fallbackText: String, yOffset: Int): List<OcrLine> {
         val iterator = runCatching { instance.getResultIterator() }.getOrNull()
             ?: return splitFallback(fallbackText)
 
         return try {
-            val texts = ArrayList<Pair<String, Int>>()
+            val texts = ArrayList<ScannedLine>()
             iterator.begin()
             do {
                 val line = runCatching { iterator.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE) }
@@ -265,7 +290,8 @@ class TesseractEngine : Closeable {
                     val confidence = runCatching {
                         iterator.confidence(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE)
                     }.getOrDefault(0f)
-                    texts += line to confidence.toInt().coerceIn(0, 100)
+                    val box = boundingBox(iterator, yOffset)
+                    texts += ScannedLine(line, confidence.toInt().coerceIn(0, 100), box.first, box.second)
                 }
             } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE))
 
@@ -295,8 +321,8 @@ class TesseractEngine : Closeable {
                 if (confidence >= OcrLine.STRONG_WORD_CONFIDENCE) strong[index]++
             } while (iterator.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
 
-            texts.mapIndexed { i, (text, confidence) ->
-                OcrLine(text, confidence, words[i], strong[i])
+            texts.mapIndexed { i, scanned ->
+                OcrLine(scanned.text, scanned.confidence, words[i], strong[i], scanned.top, scanned.bottom)
             }
         } catch (t: Throwable) {
             DiagnosticLog.w(TAG, "خواندن خطوط از ResultIterator ممکن نشد؛ متن خام شکسته می‌شود.", t)
@@ -304,6 +330,31 @@ class TesseractEngine : Closeable {
         } finally {
             runCatching { iterator.delete() }
         }
+    }
+
+    /** یک خطِ خوانده‌شده پیش از آنکه کلمه‌هایش شمرده شوند. */
+    private data class ScannedLine(val text: String, val confidence: Int, val top: Int, val bottom: Int)
+
+    /**
+     * کادرِ محصورِ خطِ جاری در مختصاتِ تصویرِ کامل.
+     *
+     * `PageIterator.getBoundingBox` آرایه‌ای چهارتایی می‌دهد که در خودِ کتابخانه
+     * به‌صورت `Rect(box[0], box[1], box[2], box[3])` — یعنی چپ/بالا/راست/پایین —
+     * تفسیر می‌شود؛ ولی مستندِ بالای همان متد آن را «x, y, w, h» می‌نامد. برای
+     * اینکه هر دو تفسیر درست کار کند، اگر عددِ چهارم از عددِ دوم کوچک‌تر بود آن را
+     * *ارتفاع* می‌گیریم و به بالا اضافه می‌کنیم.
+     *
+     * @return جفتِ (بالا، پایین) در مختصاتِ سراسری، یا [OcrLine.NO_GEOMETRY] اگر
+     *   کتابخانه مختصاتی نداد (مسیرهای جایگزین باید همچنان کار کنند).
+     */
+    private fun boundingBox(iterator: ResultIterator, yOffset: Int): Pair<Int, Int> {
+        val box = runCatching { iterator.getBoundingBox(TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE) }
+            .getOrNull()
+        if (box == null || box.size < 4) return OcrLine.NO_GEOMETRY to OcrLine.NO_GEOMETRY
+        val top = box[1]
+        val bottom = if (box[3] > box[1]) box[3] else box[1] + box[3]
+        if (bottom <= top) return OcrLine.NO_GEOMETRY to OcrLine.NO_GEOMETRY
+        return (top + yOffset) to (bottom + yOffset)
     }
 
     /**

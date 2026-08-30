@@ -133,6 +133,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             multiPassSwitch.setOnCheckedChangeListener { _, checked -> viewModel.onMultiPassChanged(checked) }
+            lexiconSwitch.setOnCheckedChangeListener { _, checked ->
+                viewModel.onLexiconCorrectionChanged(checked)
+            }
 
             pageModeSpinner.adapter = ArrayAdapter(
                 this@MainActivity,
@@ -211,6 +214,9 @@ class MainActivity : AppCompatActivity() {
                 bindingSpinner = false
             }
             if (multiPassSwitch.isChecked != state.multiPass) multiPassSwitch.isChecked = state.multiPass
+            if (lexiconSwitch.isChecked != state.lexiconCorrection) {
+                lexiconSwitch.isChecked = state.lexiconCorrection
+            }
 
             val pageModeIndex = PageMode.entries.indexOf(state.pageMode)
             if (pageModeSpinner.selectedItemPosition != pageModeIndex) {
@@ -227,6 +233,7 @@ class MainActivity : AppCompatActivity() {
             runOcrButton.isEnabled = idle
             variantSpinner.isEnabled = idle
             multiPassSwitch.isEnabled = idle
+            lexiconSwitch.isEnabled = idle
             pageModeSpinner.isEnabled = idle
 
             // ── نوار پیشرفت ─────────────────────────────────────────────────

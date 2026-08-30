@@ -80,4 +80,6 @@
     <string name="err_log_save">Could not save the report: %1$s</string>
     <string name="err_log_share">Could not send the report: %1$s</string>
     <string name="cd_back">Back</string>
+    <string name="label_lexicon_correction">Lexicon correction (experimental)</string>
+    <string name="hint_lexicon_correction">Fixes the recurring look-alike letter errors using a Persian word list: نکرش to نگرش, همجنین to همچنین, انرزی to انرژی. It only changes a word when exactly one candidate is a real word.</string>
 </resources>

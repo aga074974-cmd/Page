@@ -18,6 +18,7 @@ import ir.page.persianocr.ocr.OcrPhase
 import ir.page.persianocr.ocr.OcrRepository
 import ir.page.persianocr.ocr.PageMode
 import ir.page.persianocr.ocr.TesseractInitException
+import ir.page.persianocr.text.PersianTextOptions
 import ir.page.persianocr.util.BitmapIo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -188,6 +189,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(pageMode = mode) }
     }
 
+    fun onLexiconCorrectionChanged(enabled: Boolean) {
+        DiagnosticLog.d(TAG, "اصلاح واژگانی: $enabled")
+        _uiState.update { it.copy(lexiconCorrection = enabled) }
+    }
+
     // ──────────────────────────── اجرای OCR ────────────────────────────
 
     fun onRunOcr() {
@@ -207,6 +213,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     methods = methods,
                     pageMode = state.pageMode,
                     maxBitmapPixels = budget.maxOcrBitmapPixels,
+                    textOptions = PersianTextOptions(correctWithLexicon = state.lexiconCorrection),
                 ) { progress ->
                     _uiState.update {
                         it.copy(
@@ -258,6 +265,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             MainUiState(
                 multiPass = previous.multiPass,
                 pageMode = previous.pageMode,
+                lexiconCorrection = previous.lexiconCorrection,
                 selectedMethod = previous.selectedMethod,
             )
         }

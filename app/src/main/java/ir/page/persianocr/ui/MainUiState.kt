@@ -57,6 +57,12 @@ data class MainUiState(
      */
     val pageMode: PageMode = PageMode.DEFAULT,
 
+    /**
+     * ★ باگ ۴ — اصلاحِ خطاهای کاراکتریِ هم‌شکل با فرهنگِ واژگانِ فارسی.
+     * ماژولی مستقل است و پیش‌فرض خاموش تا بشود اثرش را جدا سنجید.
+     */
+    val lexiconCorrection: Boolean = false,
+
     val result: OcrResult? = null,
 
     /** آیا کاری در حال انجام است (نوار پیشرفت را نشان بده). */

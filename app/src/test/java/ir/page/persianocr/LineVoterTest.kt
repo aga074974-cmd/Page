@@ -113,4 +113,139 @@ class LineVoterTest {
     fun `canonical form keeps only letters and digits`() {
         assertEquals("سلامدنیا۱۲", LineVoter.canonical("سلام، دنیا! ۱۲"))
     }
+
+    // ─────────────── گروه‌بندیِ هندسی (باگ ۳) و حالتِ پرت (باگ ۲) ───────────────
+
+    /** ساختِ خطوطِ مختصات‌دار: (متن، اطمینان، بالا). ارتفاع ثابتِ ۳۰ پیکسل. */
+    private fun placed(vararg triples: Triple<String, Int, Int>): List<OcrLine> =
+        triples.map { (text, confidence, top) ->
+            val words = text.split(" ").count(String::isNotBlank)
+            OcrLine(text, confidence, words, words, top = top, bottom = top + 30)
+        }
+
+    @Test
+    fun `lines are ordered by Y even when a mode reads extra lines`() {
+        // بازسازیِ دقیقِ چیزی که در گزارش اتفاق افتاد: یک حالت خطوطِ آشغالِ اضافی
+        // درمی‌آورد، پس ترازِ مبتنی بر اندیس، خطِ وسطِ پاراگراف را جابه‌جا می‌کرد.
+        val clean = placed(
+            Triple("چون رفتار", 90, 100),
+            Triple("سست‌کننده باشد مثلا این کار", 90, 300),
+        )
+        val noisy = placed(
+            Triple("چون رفتار", 88, 102),
+            Triple("ما به‌شدت تحت تأثیر نگرش ما است", 96, 200),
+            Triple("سست‌کننده باشد مثلا این کار", 88, 298),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, clean),
+                VariantLines(BinarizationMethod.SAUVOLA, clean),
+                VariantLines(BinarizationMethod.ADAPTIVE_GAUSSIAN, noisy),
+            ),
+        )
+        assertTrue("باید مسیر هندسی انتخاب می‌شد", vote.geometric)
+        // خطِ میانی باید *بین* دو خطِ دیگر بنشیند، نه اولِ صفحه.
+        // (مرکزِ هر خوشه میانگینِ اعضایش است، پس عددِ دقیق را ادعا نمی‌کنیم.)
+        val centers = vote.lines.map { it.centerY }
+        assertEquals(centers.sorted(), centers)
+        assertEquals(3, centers.size)
+        assertTrue("$centers", centers[0] in 100..145 && centers[1] in 200..245 && centers[2] in 300..345)
+        assertEquals(
+            listOf("چون رفتار", "ما به‌شدت تحت تأثیر نگرش ما است", "سست‌کننده باشد مثلا این کار"),
+            vote.lines.map { it.text },
+        )
+    }
+
+    @Test
+    fun `the same row read twice by one mode counts as one vote`() {
+        // نویز باعث می‌شود Tesseract یک ردیف را دوبار بخواند. با گروه‌بندیِ Y هر دو
+        // نسخه در یک خوشه می‌افتند و به‌جای دو خطِ تکراری یک خط شمرده می‌شوند.
+        val doubled = placed(
+            Triple("ما به‌شدت تحت تأثیر نگرش ما است", 97, 200),
+            Triple("ما به‌شدت تحت تاثیر نکرش ما استت", 96, 205),
+        )
+        val other = placed(Triple("ما به‌شدت تحت تأثیر نگرش ما است", 90, 202))
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.ADAPTIVE_GAUSSIAN, doubled),
+                VariantLines(BinarizationMethod.OTSU, other),
+                VariantLines(BinarizationMethod.SAUVOLA, other),
+            ),
+        )
+        assertEquals(1, vote.lines.size)
+        assertEquals(3, vote.lines.single().votes)
+    }
+
+    @Test
+    fun `a confident junk line seen only by the outlier mode is dropped`() {
+        val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
+        val noisy = placed(
+            Triple("متن واقعی صفحه که همه دیده‌اند", 84, 103),
+            // اطمینانِ ۹۶ — با قانونِ قدیمی پذیرفته می‌شد.
+            Triple("۰   ۰۰   ی   ل    2 ,| ۳   و۱ ب ۱", 96, 400),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, real),
+                VariantLines(BinarizationMethod.SAUVOLA, real),
+                VariantLines(BinarizationMethod.ADAPTIVE_GAUSSIAN, noisy),
+            ),
+            outliers = setOf(BinarizationMethod.ADAPTIVE_GAUSSIAN),
+        )
+        assertEquals(1, vote.acceptedLines.size)
+        val rejected = vote.rejectedLines.single()
+        assertTrue(rejected.reason.orEmpty(), rejected.reason.orEmpty().contains("پرت"))
+    }
+
+    @Test
+    fun `a line the outlier mode agrees on with others still counts`() {
+        // حالتِ پرت حذف نشده: رأیش وقتی هم‌جهت با بقیه باشد کاملاً معتبر است.
+        val real = placed(Triple("متن واقعی صفحه", 88, 100))
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, real),
+                VariantLines(BinarizationMethod.SAUVOLA, real),
+                VariantLines(BinarizationMethod.ADAPTIVE_GAUSSIAN, placed(Triple("متن واقعی صفحه", 99, 101))),
+            ),
+            outliers = setOf(BinarizationMethod.ADAPTIVE_GAUSSIAN),
+        )
+        assertEquals(1, vote.acceptedLines.size)
+        assertEquals(3, vote.acceptedLines.single().votes)
+    }
+
+    @Test
+    fun `a junk singleton is rejected by the quality gate even without an outlier verdict`() {
+        val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
+        val noisy = placed(
+            Triple("متن واقعی صفحه که همه دیده‌اند", 84, 103),
+            Triple("۰   ۰۰   ی   ل    2 ,| ۳   و۱ ب ۱", 96, 400),
+        )
+        // بدونِ اعلامِ «پرت» — این بار باید دروازهٔ کیفیت (باگ ۱) جلویش را بگیرد.
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, real),
+                VariantLines(BinarizationMethod.SAUVOLA, real),
+                VariantLines(BinarizationMethod.ADAPTIVE_MEAN, noisy),
+            ),
+        )
+        assertEquals(1, vote.acceptedLines.size)
+        assertTrue(vote.rejectedLines.single().reason.orEmpty().contains("شبیه متن نیست"))
+    }
+
+    @Test
+    fun `a real singleton line still survives when nothing is wrong with it`() {
+        val real = placed(Triple("متن واقعی صفحه که همه دیده‌اند", 88, 100))
+        val extra = placed(
+            Triple("متن واقعی صفحه که همه دیده‌اند", 84, 103),
+            Triple("این خط را فقط یک حالت دید ولی متنِ سالمی است", 90, 400),
+        )
+        val vote = LineVoter.combine(
+            listOf(
+                VariantLines(BinarizationMethod.OTSU, real),
+                VariantLines(BinarizationMethod.SAUVOLA, real),
+                VariantLines(BinarizationMethod.ADAPTIVE_MEAN, extra),
+            ),
+        )
+        assertEquals(2, vote.acceptedLines.size)
+    }
 }

@@ -16,6 +16,16 @@ data class PersianTextOptions(
     val applyZwnj: Boolean = true,
     /** حذف فاصله‌های اضافی و خطوط خالی زائد. */
     val tidyWhitespace: Boolean = true,
+    /**
+     * ★ باگ ۴ (اختیاری) — اصلاحِ خطاهای کاراکتریِ هم‌شکل با تکیه بر فرهنگِ واژگان
+     * («نکرش»→«نگرش»، «همجنین»→«همچنین»، «انرزی»→«انرژی»، «می‌پزسم»→«می‌پرسم»).
+     *
+     * پیش‌فرض خاموش است؛ ماژولی مستقل است و از تنظیماتِ اپ روشن می‌شود.
+     * حتی وقتی روشن باشد، [PersianTextNormalizer.normalise] خودش کاری نمی‌کند —
+     * اصلاح در [ir.page.persianocr.text.ConfusionCorrector] و با فرهنگی که
+     * فراخوان می‌دهد انجام می‌شود، تا این کلاس بی‌وابستگی بماند.
+     */
+    val correctWithLexicon: Boolean = false,
 )
 
 /**
@@ -169,6 +179,26 @@ object PersianTextNormalizer {
         if (options.tidyWhitespace) text = tidyWhitespace(text)
 
         return text
+    }
+
+    /**
+     * شکلِ متعارفِ یک واژه برای جست‌وجو در فرهنگِ واژگان.
+     *
+     * فرهنگ با همین قاعده ساخته شده: حروفِ عربی به فارسی، بدون اعراب و بدون
+     * نیم‌فاصله. حذفِ نیم‌فاصله عمدی است — «می‌گوید» و «میگوید» باید یک کلید بدهند،
+     * وگرنه هر واژه‌ای که OCR فاصله‌اش را از دست داده «ناشناخته» می‌شد.
+     */
+    fun lexiconKey(word: String): String {
+        val builder = StringBuilder(word.length)
+        for (ch in word) {
+            when {
+                ch == ZWNJ -> Unit
+                ch in STRIPPABLE -> Unit
+                LETTER_MAP.containsKey(ch) -> builder.append(LETTER_MAP.getValue(ch))
+                else -> builder.append(ch)
+            }
+        }
+        return builder.toString()
     }
 
     // ────────────────────────── نگاشت کاراکترها ──────────────────────────

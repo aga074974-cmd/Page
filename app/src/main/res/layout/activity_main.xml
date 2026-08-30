@@ -243,6 +243,21 @@
                     android:textAppearance="?attr/textAppearanceBodySmall"
                     android:alpha="0.75" />
 
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/lexiconSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:checked="false"
+                    android:text="@string/label_lexicon_correction" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/hint_lexicon_correction"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:alpha="0.75" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/runOcrButton"
                     android:layout_width="match_parent"

@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import ir.page.persianocr.image.BinarizationMethod
 import ir.page.persianocr.image.PreprocessResult
 import ir.page.persianocr.log.DiagnosticLog
+import ir.page.persianocr.text.AssetLexicon
+import ir.page.persianocr.text.ConfusionCorrector
 import ir.page.persianocr.text.PersianTextNormalizer
 import ir.page.persianocr.text.PersianTextOptions
 import java.io.File
@@ -51,6 +53,9 @@ class OcrRepository(
 
         /** نیم‌فاصله — فقط برای شمارش در گزارش. */
         private const val ZWNJ = '‌'
+
+        /** بیشینهٔ تعدادِ اصلاحِ واژگانی که تک‌تک در گزارش می‌آید. */
+        private const val MAX_LOGGED_CORRECTIONS = 40
     }
 
     private val installer = TessDataInstaller(context)
@@ -132,7 +137,12 @@ class OcrRepository(
                     try {
                         bitmap = preprocessed.toBitmap(method, band)
                         val done = unitsDone
-                        val output = engine.recognise(bitmap, pageMode.psm, dpi) { enginePercent ->
+                        // آفستِ نوار: مختصاتی که Tesseract می‌دهد نسبت به Bitmapِ همین
+                        // کاشی است. با افزودن این عدد، مختصاتِ همهٔ کاشی‌ها و همهٔ
+                        // حالت‌ها در یک دستگاهِ مشترک قرار می‌گیرد — دقیقاً چیزی که
+                        // گروه‌بندیِ مبتنی بر Y به آن نیاز دارد (باگ ۳).
+                        val yOffset = preprocessed.bandYOffset(band)
+                        val output = engine.recognise(bitmap, pageMode.psm, dpi, yOffset) { enginePercent ->
                             val overall = 5 + (92.0 * (done + enginePercent / 100.0) / totalUnits)
                             onProgress(OcrProgress(OcrPhase.RECOGNISING, overall.toInt(), label))
                         }
@@ -173,9 +183,25 @@ class OcrRepository(
             onProgress(OcrProgress(OcrPhase.VOTING, 96))
 
             val candidates = buildCandidates(outputs, textOptions)
+
+            // ★ باگ ۲ — حالت‌هایی که آمارشان به‌شکل غیرعادی از میانه فاصله دارد،
+            // پیش از رأی‌گیری علامت می‌خورند. حذف نمی‌شوند؛ فقط رأیِ تک‌نفره‌شان
+            // اعتبار ندارد.
+            val outliers = if (methods.size > 1) {
+                ModeOutlierDetector.analyse(
+                    outputs.map { (method, output) ->
+                        ModeStats(method, output.lines.size, output.meanConfidence)
+                    },
+                ).also(::logOutliers)
+            } else {
+                ModeOutlierDetector.Analysis(emptySet(), 0, 0, emptyMap())
+            }
+
             val vote = if (methods.size > 1) {
-                LineVoter.combine(outputs.map { (method, output) -> VariantLines(method, output.lines) })
-                    .also(::logVote)
+                LineVoter.combine(
+                    outputs.map { (method, output) -> VariantLines(method, output.lines) },
+                    outliers.outliers,
+                ).also(::logVote)
             } else {
                 null
             }
@@ -186,7 +212,11 @@ class OcrRepository(
 
             ensureActive()
             onProgress(OcrProgress(OcrPhase.POSTPROCESSING, 98))
-            val finalText = PersianTextNormalizer.normalise(chosenRaw, textOptions)
+            val normalised = PersianTextNormalizer.normalise(chosenRaw, textOptions)
+            // ★ باگ ۴ — ماژولِ مستقلِ اصلاحِ کاراکتری. پس از یکسان‌سازی اجرا می‌شود
+            // تا فرهنگ با حروفِ فارسیِ استاندارد مقایسه شود، و اگر خاموش باشد
+            // فرهنگ اصلاً از assets خوانده نمی‌شود.
+            val finalText = applyLexiconCorrection(normalised, textOptions)
 
             logCandidates(candidates, vote)
             logPostProcessing(chosenRaw, finalText)
@@ -211,6 +241,38 @@ class OcrRepository(
             )
             result
         }
+    }
+
+    // ─────────────────────── اصلاحِ واژگانی (باگ ۴) ───────────────────────
+
+    /**
+     * اجرای [ConfusionCorrector] اگر کاربر روشنش کرده باشد.
+     *
+     * خاموش که باشد، هیچ فایلی از assets خوانده نمی‌شود و هیچ هزینه‌ای ندارد.
+     */
+    private fun applyLexiconCorrection(text: String, options: PersianTextOptions): String {
+        if (!options.correctWithLexicon || text.isBlank()) return text
+
+        val lexicon = AssetLexicon.load(context)
+        if (lexicon.size == 0) return text
+
+        val report = DiagnosticLog.timed(TAG, "اصلاح واژگانی") {
+            ConfusionCorrector.correct(text, lexicon)
+        }
+        DiagnosticLog.i(
+            TAG,
+            "اصلاح واژگانی: ${report.changeCount} واژه اصلاح شد" +
+                " • ${report.unresolved} واژهٔ ناشناخته بدون نامزدِ یکتا رها شد" +
+                " • فرهنگ ${lexicon.size} واژه",
+        )
+        // فهرستِ تغییرها کوتاه نگه داشته می‌شود تا گزارش پر نشود.
+        report.changes.take(MAX_LOGGED_CORRECTIONS).forEach { (before, after) ->
+            DiagnosticLog.d(TAG, "  «$before» → «$after»")
+        }
+        if (report.changeCount > MAX_LOGGED_CORRECTIONS) {
+            DiagnosticLog.d(TAG, "  … و ${report.changeCount - MAX_LOGGED_CORRECTIONS} اصلاحِ دیگر")
+        }
+        return report.text
     }
 
     // ─────────────────────────── ساخت نامزدها ───────────────────────────
@@ -266,11 +328,36 @@ class OcrRepository(
         }
     }
 
+    /** ثبتِ حالت‌هایی که «پرت» شناخته شدند و دلیلش. */
+    private fun logOutliers(analysis: ModeOutlierDetector.Analysis) {
+        if (analysis.outliers.isEmpty()) {
+            DiagnosticLog.i(
+                TAG,
+                "حالتِ پرتی پیدا نشد (میانه: ${analysis.medianLines} خط،" +
+                    " اطمینان ${analysis.medianConfidence}).",
+            )
+            return
+        }
+        DiagnosticLog.i(
+            TAG,
+            "── حالتِ پرت: ${analysis.outliers.joinToString { it.name }} ──" +
+                " (میانه: ${analysis.medianLines} خط، اطمینان ${analysis.medianConfidence})",
+        )
+        analysis.reasons.forEach { (method, reason) ->
+            DiagnosticLog.i(TAG, "  ${method.name}: $reason")
+        }
+        DiagnosticLog.i(
+            TAG,
+            "رأیِ این حالت‌ها فقط وقتی شمرده می‌شود که حالتِ دیگری هم همان خط را دیده باشد.",
+        )
+    }
+
     /** ثبتِ کاملِ نتیجهٔ رأی‌گیری: هر خط، چند رأی آورد و از کدام حالت‌ها. */
     private fun logVote(vote: VoteResult) {
         DiagnosticLog.i(
             TAG,
-            "── رأی‌گیری خط‌به‌خط: ${vote.lines.size} خطِ تراز‌شده بین ${vote.variantCount} حالت ──",
+            "── رأی‌گیری خط‌به‌خط: ${vote.lines.size} خطِ گروه‌شده بین ${vote.variantCount} حالت" +
+                " (${if (vote.geometric) "بر اساس مختصات Y" else "بر اساس ترازِ متنی"}) ──",
         )
         vote.lines.forEachIndexed { index, line ->
             val mark = if (line.accepted) "✓" else "✗"
@@ -278,8 +365,10 @@ class OcrRepository(
                 TAG,
                 String.format(Locale.US, "%s خط %02d | %d/%d رأی", mark, index + 1, line.votes, vote.variantCount) +
                     " | توافق ${line.agreement} | اطمینان ${line.confidence}" +
+                    (if (line.centerY != OcrLine.NO_GEOMETRY) " | y=${line.centerY}" else "") +
                     " | ${line.methods.joinToString(",") { it.name.take(4) }}" +
                     " | ${preview(line.text, 90)}" +
+                    (line.quality?.let { " | کیفیت: ${it.summary()}" } ?: "") +
                     (line.reason?.let { " | رد: $it" } ?: ""),
             )
         }
