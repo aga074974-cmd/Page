@@ -444,7 +444,7 @@ MainActivity  ──(رویداد)──▶  MainViewModel  ──▶  OcrReposi
 | `Could not find cz.adaptech.tesseract4android:...` | مخزن **JitPack** به `settings.gradle.kts` اضافه نشده. |
 | `Unresolved reference: cz.adaptech.tesseract4android.TessBaseAPI` | نام بستهٔ جاوا `com.googlecode.tesseract.android` است، نه نام گروه Maven. |
 | «مقداردهی اولیهٔ Tesseract ناموفق بود» | فایل‌های `*.traineddata` در `assets/tessdata/` نیستند یا خراب‌اند. `./scripts/fetch-tessdata.sh` را اجرا و اپ را دوباره نصب کنید. |
-| «بارگذاری OpenCV ناموفق بود» | ABI دستگاه در `abiFilters` نیست، یا کتابخانهٔ بومی در APK نیامده. `abiFilters` را در `app/build.gradle.kts` بررسی کنید. |
+| «بارگذاری OpenCV ناموفق بود» | APK مربوط به معماری دستگاه را نصب نکرده‌اید (مثلاً نسخهٔ `armeabi-v7a` روی گوشی arm64). نسخهٔ `arm64-v8a` را امتحان کنید، یا فهرست `splits { abi { include(…) } }` را در `app/build.gradle.kts` بررسی کنید. |
 | «حافظه کافی نیست» | ناحیهٔ کوچک‌تری برش بزنید یا `MAX_WORKING_PIXELS` را کم کنید. |
 | خروجی خالی است | کیفیت پیش‌نمایشِ پیش‌پردازش را ببینید؛ اگر متن در تصویر باینری محو یا شکسته است، برش را اصلاح کنید یا حالت باینری‌سازی دیگری را امتحان کنید. |
 | متن به‌هم‌ریخته نمایش داده می‌شود | این معمولاً مشکل *نمایش* است نه OCR. نمایش BiDi به خود اندروید سپرده شده؛ اگر متن را جای دیگری کپی می‌کنید، مطمئن شوید آن برنامه از RTL پشتیبانی می‌کند. |
