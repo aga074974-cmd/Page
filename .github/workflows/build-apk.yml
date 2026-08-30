@@ -61,16 +61,23 @@ jobs:
 
       - name: گزارش خروجی
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          ls -lh "$APK"
-          echo "### ✅ APK ساخته شد" >> "$GITHUB_STEP_SUMMARY"
-          echo "اندازه: $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          ls -lh app/build/outputs/apk/debug/
+          {
+            echo "### ✅ APK ساخته شد"
+            echo
+            echo "| فایل | اندازه |"
+            echo "|------|--------|"
+            for f in app/build/outputs/apk/debug/*.apk; do
+              echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: بارگذاری APK به‌عنوان artifact
+      - name: بارگذاری APKها به‌عنوان artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       # Release یک لینک دانلود مستقیمِ .apk می‌دهد (بدون zip) که روی گوشی
@@ -81,12 +88,16 @@ jobs:
         run: |
           set -euo pipefail
           NOTES="ساخته‌شده از ${GITHUB_SHA::7} روی برنچ ${GITHUB_REF_NAME}."
-          NOTES="$NOTES"$'\n\n'"نصب: فایل app-debug.apk را روی گوشی دانلود کنید و روی آن بزنید."
+          NOTES="$NOTES"$'\n\n'"**کدام فایل را دانلود کنم؟**"
+          NOTES="$NOTES"$'\n'"- \`app-arm64-v8a-debug.apk\` — تقریباً همهٔ گوشی‌های امروزی. اول این را امتحان کنید."
+          NOTES="$NOTES"$'\n'"- \`app-armeabi-v7a-debug.apk\` — گوشی‌های خیلی قدیمیِ ۳۲ بیتی."
+          NOTES="$NOTES"$'\n'"- \`app-x86_64-debug.apk\` — شبیه‌ساز."
+          NOTES="$NOTES"$'\n\n'"نصب: فایل را روی گوشی دانلود کنید و روی آن بزنید."
           NOTES="$NOTES"$'\n'"اگر اندروید اجازه نداد، در تنظیمات «نصب برنامه‌های ناشناس» را برای مرورگرتان روشن کنید."
           gh release delete debug-latest --yes --cleanup-tag 2>/dev/null || true
           gh release create debug-latest \
-            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/debug/*.apk \
             --title "آخرین بیلد دیباگ" \
             --notes "$NOTES" \
             --prerelease
-          echo "لینک مستقیم: https://github.com/${GITHUB_REPOSITORY}/releases/download/debug-latest/app-debug.apk" >> "$GITHUB_STEP_SUMMARY"
+          echo "لینک مستقیم (arm64): https://github.com/${GITHUB_REPOSITORY}/releases/download/debug-latest/app-arm64-v8a-debug.apk" >> "$GITHUB_STEP_SUMMARY"

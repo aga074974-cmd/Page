@@ -261,7 +261,25 @@ implementation("cz.adaptech.tesseract4android:tesseract4android-openmp:4.8.0")
 ./gradlew :app:test                  # تست‌های واحد JVM
 ```
 
-APK خروجی: `app/build/outputs/apk/debug/app-debug.apk`
+APKهای خروجی در `app/build/outputs/apk/debug/` — یک فایل به ازای هر معماری:
+
+| فایل | برای چه دستگاهی | حجم |
+|------|------------------|-----|
+| `app-arm64-v8a-debug.apk` | تقریباً همهٔ گوشی‌های امروزی | ≈ ۵۰ MB |
+| `app-armeabi-v7a-debug.apk` | گوشی‌های قدیمیِ ۳۲ بیتی | ≈ ۴۵ MB |
+| `app-x86_64-debug.apk` | شبیه‌ساز | ≈ ۷۰ MB |
+
+کتابخانه‌های بومی OpenCV و Tesseract برای هر ABI ده‌ها مگابایت‌اند؛ بدون
+`splits { abi { … } }` یک APK یونیورسال حدود **۱۸۷ مگابایت** می‌شد. اگر به هر دلیلی
+نسخهٔ یونیورسال لازم دارید، در `app/build.gradle.kts` مقدار `isUniversalApk` را
+`true` کنید.
+
+### ساخت در ابر (بدون نصب هیچ چیز)
+
+اگر Android SDK ندارید، workflow موجود در `.github/workflows/build-apk.yml` همین کار
+را روی GitHub Actions انجام می‌دهد: فایل‌های زبان را دانلود می‌کند، تست‌ها را می‌گیرد،
+APKها را می‌سازد و آن‌ها را به‌صورت یک Release با لینک دانلود مستقیم منتشر می‌کند.
+از تب **Actions** در گیت‌هاب می‌توانید دستی هم اجرایش کنید.
 
 **مجوزها:** اپ هیچ مجوزی درخواست نمی‌کند.
 - انتخاب از گالری با `PickVisualMedia` انجام می‌شود که به مجوز حافظه نیاز ندارد.

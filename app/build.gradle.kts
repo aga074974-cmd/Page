@@ -17,8 +17,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // ABIهایی که کتابخانه‌های بومی Tesseract و OpenCV برایشان ساخته شده‌اند.
+        // x86 (۳۲ بیتی) کنار گذاشته شده — عملاً هیچ دستگاه امروزی از آن استفاده نمی‌کند.
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
 
@@ -33,6 +34,22 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    // یک APK جداگانه به ازای هر معماری.
+    //
+    // کتابخانه‌های بومی OpenCV و Tesseract روی هم برای هر ABI ده‌ها مگابایت‌اند؛ یک APK
+    // «یونیورسال» که هر سه را داشته باشد حدود ۱۸۷ مگابایت می‌شود و دانلودش روی گوشی
+    // عملاً غیرممکن است. با split، هر دستگاه فقط کتابخانهٔ خودش را می‌گیرد
+    // (arm64-v8a ≈ ۵۰ مگابایت).
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            // نسخهٔ یونیورسال ساخته نمی‌شود؛ اگر لازمش داشتید این را true کنید.
+            isUniversalApk = false
         }
     }
 
