@@ -54,4 +54,27 @@
 
     <string name="cd_source_image">Selected image for cropping</string>
     <string name="cd_preprocessed_image">Preprocessed image</string>
+    <!-- Diagnostic log -->
+    <string name="log_title">Diagnostic log</string>
+    <string name="action_log">Diagnostic log</string>
+    <string name="log_intro">Everything the app does is recorded here: sizes, timings, preprocessing decisions, the score of each binarization mode, and the text of every error. If something goes wrong, save this report and send it.</string>
+    <string name="log_privacy_note">Note: the report contains part of the text extracted from your image. Read it once before sending it to anyone.</string>
+    <string name="log_only_problems">Warnings and errors only</string>
+    <string name="log_empty">Nothing recorded yet. Process an image and come back.</string>
+    <string name="log_summary">%1$d records • session file: %2$s</string>
+    <string name="log_summary_no_file">%1$d records • could not write to disk (memory only)</string>
+    <string name="log_previous_crash">The previous run ended in a crash; its text is included in the saved report.</string>
+    <string name="btn_log_save">Save to file</string>
+    <string name="btn_log_share">Send</string>
+    <string name="btn_log_copy">Copy</string>
+    <string name="btn_log_clear">Clear</string>
+    <string name="msg_log_saved">Report saved.</string>
+    <string name="msg_log_copied">Report copied to the clipboard.</string>
+    <string name="msg_log_cleared">Log cleared.</string>
+    <string name="msg_log_share_title">Send the diagnostic log</string>
+    <string name="log_clear_confirm">The displayed records will be cleared. This session's log file on device storage is left untouched.</string>
+    <string name="err_log_copy">Could not copy the report (%1$s). Use “Save to file” instead.</string>
+    <string name="err_log_save">Could not save the report: %1$s</string>
+    <string name="err_log_share">Could not send the report: %1$s</string>
+    <string name="cd_back">Back</string>
 </resources>

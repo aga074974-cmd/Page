@@ -2,12 +2,13 @@ package ir.page.persianocr.ocr
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import ir.page.persianocr.image.BinarizationMethod
 import ir.page.persianocr.image.PreprocessResult
+import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.text.PersianTextNormalizer
 import ir.page.persianocr.text.PersianTextOptions
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -39,13 +40,16 @@ class OcrRepository(
 ) {
 
     companion object {
-        private const val TAG = "OcrRepository"
+        private const val TAG = "OCR"
 
         /** زبان‌های موردنیاز — فارسی + عربی. */
         val LANGUAGES = listOf("fas", "ara")
 
         /** رشته‌ای که به `TessBaseAPI.init()` داده می‌شود. */
         const val LANGUAGE_SPEC = "fas+ara"
+
+        /** نیم‌فاصله — فقط برای شمارش در گزارش. */
+        private const val ZWNJ = '\u200C'
     }
 
     private val installer = TessDataInstaller(context)
@@ -71,10 +75,19 @@ class OcrRepository(
         mutex.withLock {
             val started = System.currentTimeMillis()
 
+            DiagnosticLog.section("اجرای OCR")
+            DiagnosticLog.i(
+                TAG,
+                "حالت‌ها: ${methods.joinToString { it.name }}" +
+                    " • PSM=$pageSegMode" +
+                    " • تصویر ${preprocessed.width}×${preprocessed.height}",
+            )
+            DiagnosticLog.d(TAG, "گزینه‌های پس‌پردازش فارسی: $textOptions")
+
             // ── آماده‌سازی: کپی داده‌های زبان و مقداردهی موتور ──────────────────
             onProgress(OcrProgress(OcrPhase.INSTALLING_DATA, 0))
             val dataPath: File = installer.install(LANGUAGES) { name ->
-                Log.i(TAG, "Copying $name from assets (first run)")
+                DiagnosticLog.i(TAG, "کپی $name از assets (فقط بار اول)")
                 onProgress(OcrProgress(OcrPhase.INSTALLING_DATA, 0))
             }
 
@@ -97,7 +110,16 @@ class OcrRepository(
                         )
                     }
                     raw += Triple(method, output.text, output.meanConfidence)
-                    Log.d(TAG, "${method.name}: conf=${output.meanConfidence} len=${output.text.length}")
+                    DiagnosticLog.i(
+                        TAG,
+                        "گذرهٔ ${index + 1}/${methods.size} — ${method.name}:" +
+                            " اطمینان ${output.meanConfidence}" +
+                            " • ${output.text.length} کاراکتر",
+                    )
+                    DiagnosticLog.d(TAG, "خام[${method.name}]: ${preview(output.text)}")
+                } catch (t: Throwable) {
+                    DiagnosticLog.e(TAG, "گذرهٔ ${method.name} شکست خورد", t)
+                    throw t
                 } finally {
                     bitmap?.recycle()
                 }
@@ -122,17 +144,79 @@ class OcrRepository(
                 )
             }.sortedByDescending { it.score }
 
+            logCandidates(candidates)
+
             onProgress(OcrProgress(OcrPhase.POSTPROCESSING, 100))
-            OcrResult(
+            val result = OcrResult(
                 best = candidates.first(),
                 candidates = candidates,
                 elapsedMillis = System.currentTimeMillis() - started,
             )
+            DiagnosticLog.i(
+                TAG,
+                "برگزیده: ${result.best.method.name}" +
+                    " • امتیاز ${"%.1f".format(Locale.US, result.best.score)}" +
+                    " • ${result.elapsedMillis}ms در کل",
+            )
+            result
+        }
+    }
+
+    /**
+     * جدولِ مقایسهٔ نامزدها — قلبِ اشکال‌یابیِ دقت.
+     *
+     * وقتی خروجی نهایی بد است، این جدول نشان می‌دهد که آیا حالتِ بهتری وجود داشته و
+     * امتیازدهی اشتباه انتخاب کرده، یا اصلاً هیچ حالتی متن درست را نگرفته است.
+     */
+    private fun logCandidates(candidates: List<OcrCandidate>) {
+        DiagnosticLog.i(TAG, "── مقایسهٔ نامزدها (به ترتیب امتیاز) ──")
+        candidates.forEachIndexed { rank, candidate ->
+            DiagnosticLog.i(
+                TAG,
+                String.format(
+                    Locale.US,
+                    "%d) %-18s امتیاز %7.1f | اطمینان %3d | %4d کاراکتر | %3d خط",
+                    rank + 1,
+                    candidate.method.name,
+                    candidate.score,
+                    candidate.meanConfidence,
+                    candidate.text.length,
+                    candidate.text.count { it == '\n' } + 1,
+                ),
+            )
+        }
+
+        // اثرِ پس‌پردازش فارسی روی متنِ برگزیده: اگر خروجی نهایی مشکل نگارشی دارد،
+        // مقایسهٔ این دو خط نشان می‌دهد ایراد از Tesseract است یا از نرمال‌سازی.
+        val best = candidates.first()
+        DiagnosticLog.d(TAG, "پیش از پس‌پردازش: ${preview(best.rawText)}")
+        DiagnosticLog.d(TAG, "پس از پس‌پردازش:  ${preview(best.text)}")
+        DiagnosticLog.d(
+            TAG,
+            "تغییر طول در پس‌پردازش: ${best.rawText.length} → ${best.text.length} کاراکتر" +
+                " • نیم‌فاصله‌های افزوده‌شده: ${best.text.count { it == ZWNJ } - best.rawText.count { it == ZWNJ }}",
+        )
+    }
+
+    /**
+     * نمایهٔ کوتاه و تک‌خطیِ یک متن برای گزارش.
+     * فقط بخش کوچکی از متن ثبت می‌شود — هم برای خوانایی گزارش و هم برای اینکه
+     * کل محتوای سند کاربر بی‌دلیل در فایل گزارش تکرار نشود.
+     */
+    private fun preview(text: String, maxChars: Int = 220): String {
+        val flat = text.replace('\n', '⏎').replace('\r', ' ').trim()
+        return if (flat.length <= maxChars) {
+            "«$flat»"
+        } else {
+            "«${flat.take(maxChars)}…» (+${flat.length - maxChars} کاراکتر دیگر)"
         }
     }
 
     /** درخواست لغو تشخیصِ در حال اجرا. */
     fun requestStop() = engine.requestStop()
+
+    /** نسخهٔ کتابخانهٔ بومی Tesseract — پس از مقداردهی معتبر است. */
+    fun engineVersion(): String = engine.engineVersion()
 
     /** آزادسازی موتور — از `ViewModel.onCleared()` صدا زده می‌شود. */
     fun close() = engine.close()

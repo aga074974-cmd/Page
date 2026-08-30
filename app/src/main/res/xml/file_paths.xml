@@ -2,4 +2,6 @@
 <paths>
     <!-- محل ذخیرهٔ موقت عکس گرفته‌شده با دوربین -->
     <cache-path name="captures" path="captures/" />
+    <!-- گزارش اشکال‌یابی که برای «ارسال» ساخته می‌شود -->
+    <cache-path name="logs" path="logs/" />
 </paths>

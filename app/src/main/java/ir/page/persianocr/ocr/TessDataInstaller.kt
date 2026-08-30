@@ -1,7 +1,7 @@
 package ir.page.persianocr.ocr
 
 import android.content.Context
-import android.util.Log
+import ir.page.persianocr.log.DiagnosticLog
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -26,7 +26,7 @@ class MissingTessDataException(val missing: List<String>) :
 class TessDataInstaller(private val context: Context) {
 
     companion object {
-        private const val TAG = "TessDataInstaller"
+        private const val TAG = "TessData"
         private const val ASSET_DIR = "tessdata"
         private const val EXTENSION = ".traineddata"
     }
@@ -48,14 +48,20 @@ class TessDataInstaller(private val context: Context) {
     @Throws(IOException::class)
     fun install(languages: List<String>, onCopy: (String) -> Unit = {}): File {
         if (!tessdataDir.exists() && !tessdataDir.mkdirs()) {
+            DiagnosticLog.e(TAG, "ساخت پوشهٔ ${tessdataDir.absolutePath} ممکن نشد.")
             throw IOException("Cannot create ${tessdataDir.absolutePath}")
         }
 
         val available = runCatching { context.assets.list(ASSET_DIR)?.toSet().orEmpty() }
             .getOrDefault(emptySet())
+        DiagnosticLog.d(TAG, "فایل‌های موجود در assets/$ASSET_DIR: ${available.joinToString().ifEmpty { "(هیچ)" }}")
 
         val missing = languages.filterNot { "$it$EXTENSION" in available }
-        if (missing.isNotEmpty()) throw MissingTessDataException(missing)
+        if (missing.isNotEmpty()) {
+            // شایع‌ترین علتِ خطای «موتور آماده نشد»: فایل‌های زبان در بیلد جا نیفتاده‌اند.
+            DiagnosticLog.e(TAG, "فایل زبان در assets نیست: ${missing.joinToString()}")
+            throw MissingTessDataException(missing)
+        }
 
         for (language in languages) {
             val name = "$language$EXTENSION"
@@ -67,15 +73,24 @@ class TessDataInstaller(private val context: Context) {
                 (expectedSize < 0 || target.length() == expectedSize)
 
             if (upToDate) {
-                Log.d(TAG, "$name already installed (${target.length()} bytes)")
+                DiagnosticLog.d(TAG, "$name از قبل نصب است (${target.length()} بایت)")
                 continue
             }
 
+            DiagnosticLog.i(
+                TAG,
+                "کپی $name به ${target.absolutePath}" +
+                    " • اندازهٔ مورد انتظار: $expectedSize بایت" +
+                    " • فضای آزاد: ${freeSpaceBytes()} بایت",
+            )
             onCopy(name)
-            copyAsset("$ASSET_DIR/$name", target)
+            DiagnosticLog.timed(TAG, "کپی $name") { copyAsset("$ASSET_DIR/$name", target) }
         }
         return dataPath
     }
+
+    /** فضای آزادِ حافظهٔ داخلی — نبودِ فضا شایع‌ترین علتِ شکستِ کپی است. */
+    private fun freeSpaceBytes(): Long = runCatching { dataPath.usableSpace }.getOrDefault(-1L)
 
     /** اندازهٔ واقعیِ asset، یا `-1` اگر قابل تعیین نباشد (asset فشرده). */
     private fun assetSize(assetPath: String): Long = try {
@@ -105,8 +120,9 @@ class TessDataInstaller(private val context: Context) {
             if (!temp.renameTo(target)) {
                 throw IOException("Cannot rename ${temp.absolutePath} -> ${target.absolutePath}")
             }
-            Log.i(TAG, "Installed ${target.name} (${target.length()} bytes)")
+            DiagnosticLog.i(TAG, "نصب شد: ${target.name} (${target.length()} بایت)")
         } catch (t: Throwable) {
+            DiagnosticLog.e(TAG, "کپی $assetPath شکست خورد", t)
             temp.delete()
             throw t
         }

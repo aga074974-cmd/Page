@@ -1,8 +1,9 @@
 package ir.page.persianocr.image
 
 import android.graphics.Bitmap
-import android.util.Log
+import ir.page.persianocr.log.DiagnosticLog
 import java.io.Closeable
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -111,7 +112,7 @@ class PreprocessResult internal constructor(
  */
 object ImagePreprocessor {
 
-    private const val TAG = "ImagePreprocessor"
+    private const val TAG = "Preprocess"
 
     /**
      * بلندای هدف برای حروف بعد از بزرگ‌نمایی. Tesseract روی متنی با ارتفاع ۳۰ تا ۳۵ پیکسل
@@ -144,6 +145,21 @@ object ImagePreprocessor {
     ): PreprocessResult {
         check(OpenCvBootstrap.ensureLoaded()) { "OpenCV is not loaded" }
 
+        DiagnosticLog.section("پیش‌پردازش تصویر")
+        DiagnosticLog.i(
+            TAG,
+            "ورودی: ${source.width}×${source.height} (${source.config}) • ${DiagnosticLog.heapSummary()}",
+        )
+
+        // زمان‌سنجِ ساده‌ای که مدتِ هر مرحله را جدا گزارش می‌کند؛ برای پیداکردن اینکه
+        // کدام مرحله وقت می‌برد یا کجا کار خراب شده، دقیق‌ترین سرنخ است.
+        var stepStarted = System.nanoTime()
+        fun mark(label: String, detail: String = "") {
+            val millis = (System.nanoTime() - stepStarted) / 1_000_000
+            DiagnosticLog.d(TAG, "$label — ${millis}ms${if (detail.isEmpty()) "" else " • $detail"}")
+            stepStarted = System.nanoTime()
+        }
+
         val rgba = Mat()
         Utils.bitmapToMat(source, rgba)
 
@@ -161,6 +177,7 @@ object ImagePreprocessor {
             rgba.release()
             // قطبیت را یکدست می‌کنیم: از این به بعد همه‌جا «متن تیره روی زمینهٔ روشن».
             normalisePolarity(gray)
+            mark("۱) خاکستری‌سازی", "${gray.cols()}×${gray.rows()}")
 
             // ── ۲) بزرگ‌نمایی تا ~۳۰۰ DPI ─────────────────────────────────────
             onStep(PreprocessStep.UPSCALE)
@@ -183,11 +200,18 @@ object ImagePreprocessor {
                 gray.clone()
             }
             gray.release(); gray = null
+            mark(
+                "۲) بزرگ‌نمایی",
+                "ارتفاع حروف ${fmt(charHeightBefore, 1)}px" +
+                    " → ضریب ×${fmt(factor)}" +
+                    " → ${upscaled.cols()}×${upscaled.rows()}",
+            )
 
             // ── ۳) کاهش نویز ──────────────────────────────────────────────────
             onStep(PreprocessStep.DENOISE)
             denoised = denoise(upscaled)
             upscaled.release(); upscaled = null
+            mark("۳) کاهش نویز")
 
             // ── ۴) صاف‌کردن کجی ───────────────────────────────────────────────
             onStep(PreprocessStep.DESKEW)
@@ -198,6 +222,14 @@ object ImagePreprocessor {
                 denoised.clone()
             }
             denoised.release(); denoised = null
+            mark(
+                "۴) صاف‌کردن کجی",
+                if (abs(angle) >= 0.05) {
+                    "چرخش ${fmt(angle)}° → ${deskewed.cols()}×${deskewed.rows()}"
+                } else {
+                    "زاویه ناچیز (${fmt(angle)}°)؛ چرخشی اعمال نشد"
+                },
+            )
 
             val charHeightAfter = (charHeightBefore * factor).takeIf { it > 1.0 }
                 ?: TARGET_CHAR_HEIGHT_PX
@@ -205,17 +237,34 @@ object ImagePreprocessor {
             // ── ۵) باینری‌سازی (همهٔ حالت‌ها) + ۶) مورفولوژی ───────────────────
             onStep(PreprocessStep.BINARIZE)
             val window = oddInRange((charHeightAfter * 2.0).roundToInt(), 15, 101)
+            DiagnosticLog.d(TAG, "پنجرهٔ آستانه‌گیری محلی: ${window}px (ارتفاع حروف ${fmt(charHeightAfter, 1)}px)")
             for (method in BinarizationMethod.entries) {
                 val binary = binarize(deskewed, method, window)
                 variants[method] = binary
             }
+            mark("۵) باینری‌سازی", "${variants.size} حالت")
 
             onStep(PreprocessStep.MORPHOLOGY)
             for ((method, mat) in variants) {
                 variants[method] = finish(mat).also { mat.release() }
             }
+            mark("۶) مورفولوژی")
+
+            // نسبت «جوهر» هر حالت: سهم پیکسل‌های تیره. عدد سالم برای یک سند معمولی
+            // چیزی حدود ۳٪ تا ۲۵٪ است. نزدیک صفر یعنی متن پاک شده و نزدیک ۱۰۰ یعنی
+            // تصویر سیاه شده — هر دو، ریشهٔ خروجی خالی یا آشغالِ OCR را توضیح می‌دهند.
+            for ((method, mat) in variants) {
+                DiagnosticLog.d(TAG, "حالت ${method.name}: جوهر ${fmt(inkPercent(mat), 1)}٪")
+            }
 
             val any = variants.values.first()
+            DiagnosticLog.i(
+                TAG,
+                "پیش‌پردازش تمام شد: ${any.cols()}×${any.rows()}" +
+                    " • ضریب ×${fmt(factor)}" +
+                    " • چرخش ${fmt(angle)}°" +
+                    " • ${DiagnosticLog.heapSummary()}",
+            )
             return PreprocessResult(
                 variants = variants,
                 deskewAngleDegrees = angle,
@@ -225,12 +274,34 @@ object ImagePreprocessor {
                 height = any.rows(),
             )
         } catch (t: Throwable) {
+            DiagnosticLog.e(TAG, "خط لولهٔ پیش‌پردازش شکست خورد", t)
             variants.values.forEach { it.release() }
             throw t
         } finally {
             // آزادسازی همهٔ Matهای میانی؛ نشتی حافظهٔ بومی به‌سرعت اپ را می‌کشد.
             listOf(rgba, gray, upscaled, denoised, deskewed).forEach { it?.release() }
         }
+    }
+
+    /**
+     * قالب‌بندی عدد اعشاری با **ارقام لاتین**.
+     *
+     * `String.format` بدون Locale از زبان دستگاه پیروی می‌کند؛ روی گوشیِ فارسی
+     * «۱٫۸۵» چاپ می‌شود و کنارِ عددهای لاتینِ همان خط (تعداد پیکسل‌ها) هم ناهماهنگ
+     * دیده می‌شود و هم جست‌وجو در گزارش را سخت می‌کند.
+     */
+    private fun fmt(value: Double, decimals: Int = 2): String =
+        String.format(Locale.US, "%.${decimals}f", value)
+
+    /**
+     * درصد پیکسل‌های تیره («جوهر») در یک تصویر باینری — یک سنجهٔ سلامتِ ارزان
+     * برای تشخیص باینری‌سازیِ خراب. فقط برای گزارش استفاده می‌شود.
+     */
+    private fun inkPercent(binary: Mat): Double {
+        val total = binary.rows().toLong() * binary.cols()
+        if (total <= 0L) return 0.0
+        val white = runCatching { Core.countNonZero(binary).toLong() }.getOrElse { return -1.0 }
+        return (total - white) * 100.0 / total
     }
 
     // ───────────────────────────── قطبیت ─────────────────────────────
@@ -246,7 +317,7 @@ object ImagePreprocessor {
         val brightRatio = Core.countNonZero(otsu).toDouble() / (otsu.rows().toDouble() * otsu.cols())
         otsu.release()
         if (brightRatio < 0.5) {
-            Log.d(TAG, "Inverting polarity (bright ratio=$brightRatio, otsu=$threshold)")
+            DiagnosticLog.d(TAG, "Inverting polarity (bright ratio=$brightRatio, otsu=$threshold)")
             Core.bitwise_not(gray, gray)
         }
     }
@@ -291,7 +362,7 @@ object ImagePreprocessor {
             heights.sort()
             return heights[heights.size / 2].toDouble()
         } catch (t: Throwable) {
-            Log.w(TAG, "Char-height estimation failed", t)
+            DiagnosticLog.w(TAG, "Char-height estimation failed", t)
             return -1.0
         } finally {
             binary.release(); labels.release(); stats.release(); centroids.release()
@@ -310,7 +381,7 @@ object ImagePreprocessor {
         val pixels = gray.cols().toDouble() * gray.rows()
         val maxByMemory = sqrt(MAX_WORKING_PIXELS / pixels)
         if (maxByMemory < factor) {
-            Log.d(TAG, "Clamping upscale $factor -> $maxByMemory (memory budget)")
+            DiagnosticLog.d(TAG, "Clamping upscale $factor -> $maxByMemory (memory budget)")
             factor = max(1.0, maxByMemory)
         }
         return factor
@@ -331,7 +402,7 @@ object ImagePreprocessor {
                 Photo.fastNlMeansDenoising(src, dst, 7f, 7, 21)
                 return dst
             } catch (t: Throwable) {
-                Log.w(TAG, "fastNlMeansDenoising failed, falling back to Gaussian", t)
+                DiagnosticLog.w(TAG, "fastNlMeansDenoising failed, falling back to Gaussian", t)
             }
         }
         Imgproc.GaussianBlur(src, dst, Size(3.0, 3.0), 0.0)
@@ -371,10 +442,10 @@ object ImagePreprocessor {
 
             val coarse = searchAngle(binary, -SKEW_RANGE_DEG, SKEW_RANGE_DEG, 0.5)
             val fine = searchAngle(binary, coarse - 0.5, coarse + 0.5, 0.05)
-            Log.d(TAG, "Skew angle: coarse=$coarse fine=$fine")
+            DiagnosticLog.d(TAG, "Skew angle: coarse=$coarse fine=$fine")
             return fine
         } catch (t: Throwable) {
-            Log.w(TAG, "Skew estimation failed; skipping deskew", t)
+            DiagnosticLog.w(TAG, "Skew estimation failed; skipping deskew", t)
             return 0.0
         } finally {
             small.release(); binary.release()
@@ -616,9 +687,9 @@ object ImagePreprocessor {
                 }
                 if (dirty) foregroundWhite.put(y, 0, pixelRow)
             }
-            Log.d(TAG, "Removed $speckCount specks")
+            DiagnosticLog.d(TAG, "Removed $speckCount specks")
         } catch (t: Throwable) {
-            Log.w(TAG, "Speck removal skipped", t)
+            DiagnosticLog.w(TAG, "Speck removal skipped", t)
         } finally {
             labels.release(); stats.release(); centroids.release()
         }

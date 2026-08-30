@@ -1,8 +1,8 @@
 package ir.page.persianocr.ocr
 
 import android.graphics.Bitmap
-import android.util.Log
 import com.googlecode.tesseract.android.TessBaseAPI
+import ir.page.persianocr.log.DiagnosticLog
 import java.io.Closeable
 import java.io.File
 
@@ -21,7 +21,7 @@ data class RawOcrOutput(val text: String, val meanConfidence: Int)
 class TesseractEngine : Closeable {
 
     companion object {
-        private const val TAG = "TesseractEngine"
+        private const val TAG = "Tesseract"
 
         /** حالت پیش‌فرض قطعه‌بندی صفحه: تشخیص خودکار چیدمان. */
         const val PSM_AUTO = TessBaseAPI.PageSegMode.PSM_AUTO
@@ -51,8 +51,18 @@ class TesseractEngine : Closeable {
      */
     @Throws(TesseractInitException::class)
     fun init(dataPath: File, languages: String) {
-        if (initialisedWith == languages && api != null) return
+        if (initialisedWith == languages && api != null) {
+            DiagnosticLog.d(TAG, "موتور از قبل با «$languages» آماده است؛ مقداردهی دوباره لازم نیست.")
+            return
+        }
         close()
+
+        DiagnosticLog.i(TAG, "مقداردهی موتور — زبان‌ها: «$languages» • مسیر داده: ${dataPath.absolutePath}")
+        // فهرست فایل‌های واقعیِ روی دیسک: اگر init شکست بخورد، اولین چیزی که باید دید همین است.
+        val installed = File(dataPath, "tessdata").listFiles()
+            ?.joinToString { "${it.name} (${it.length()}B)" }
+            ?: "(پوشهٔ tessdata خوانده نشد)"
+        DiagnosticLog.d(TAG, "فایل‌های زبانِ روی دیسک: $installed")
 
         val notifier = TessBaseAPI.ProgressNotifier { values ->
             progressSink?.invoke(values.getPercent().coerceIn(0, 100))
@@ -62,19 +72,27 @@ class TesseractEngine : Closeable {
             TessBaseAPI(notifier)
         } catch (t: Throwable) {
             // UnsatisfiedLinkError روی ABI پشتیبانی‌نشده اینجا ظاهر می‌شود.
+            DiagnosticLog.e(TAG, "ساخت TessBaseAPI ممکن نشد — کتابخانهٔ بومی برای این معماری وجود ندارد؟", t)
             throw TesseractInitException("Cannot create TessBaseAPI (native library missing?)", t)
         }
 
         val ok = try {
             // OEM_LSTM_ONLY: فقط موتور عصبیِ Tesseract 5 — برای خط فارسی به‌مراتب دقیق‌تر
             // از موتور کلاسیک است و مدل‌های tessdata_best هم برای همین ساخته شده‌اند.
-            instance.init(dataPath.absolutePath, languages, TessBaseAPI.OEM_LSTM_ONLY)
+            DiagnosticLog.timed(TAG, "TessBaseAPI.init") {
+                instance.init(dataPath.absolutePath, languages, TessBaseAPI.OEM_LSTM_ONLY)
+            }
         } catch (t: Throwable) {
+            DiagnosticLog.e(TAG, "TessBaseAPI.init استثنا انداخت", t)
             runCatching { instance.recycle() }
             throw TesseractInitException("TessBaseAPI.init threw", t)
         }
 
         if (!ok) {
+            DiagnosticLog.e(
+                TAG,
+                "TessBaseAPI.init مقدار false برگرداند — زبان‌ها «$languages» در ${dataPath.absolutePath}",
+            )
             runCatching { instance.recycle() }
             throw TesseractInitException(
                 "TessBaseAPI.init returned false for languages='$languages' at ${dataPath.absolutePath}",
@@ -85,13 +103,17 @@ class TesseractEngine : Closeable {
 
         api = instance
         initialisedWith = languages
-        Log.i(TAG, "Tesseract ${engineVersion()} initialised with '$languages'")
+        DiagnosticLog.i(TAG, "موتور Tesseract ${engineVersion()} با «$languages» آماده شد.")
     }
 
     /**
      * تنظیم‌های ریزی که روی دقتِ متن فارسی اثر مستقیم دارند.
      */
     private fun applyAccuracyVariables(instance: TessBaseAPI) {
+        DiagnosticLog.d(
+            TAG,
+            "متغیرها: preserve_interword_spaces=1، user_defined_dpi=300، tessedit_do_invert=0",
+        )
         // فاصله‌های بین‌کلمه‌ای را همان‌طور که تشخیص داده شده نگه دار (برای متن RTL مهم است).
         instance.setVariable("preserve_interword_spaces", "1")
         // ما خودمان تصویر را تا ~۳۰۰ DPI بزرگ کرده‌ایم؛ به Tesseract هم همین را می‌گوییم
@@ -115,6 +137,11 @@ class TesseractEngine : Closeable {
     ): RawOcrOutput {
         val instance = api ?: throw IllegalStateException("Engine not initialised")
         progressSink = onProgress
+        val started = System.currentTimeMillis()
+        DiagnosticLog.d(
+            TAG,
+            "شروع تشخیص — تصویر ${bitmap.width}×${bitmap.height} • PSM=$pageSegMode",
+        )
         return try {
             instance.setPageSegMode(pageSegMode)
             instance.setImage(bitmap)
@@ -127,7 +154,17 @@ class TesseractEngine : Closeable {
             instance.getHOCRText(0)
             val text = instance.getUTF8Text().orEmpty()
             val confidence = runCatching { instance.meanConfidence() }.getOrDefault(0)
+            DiagnosticLog.d(
+                TAG,
+                "پایان تشخیص — ${System.currentTimeMillis() - started}ms" +
+                    " • اطمینان $confidence" +
+                    " • ${text.length} کاراکتر" +
+                    " • ${text.count { it == '\n' } + 1} خط",
+            )
             RawOcrOutput(text, confidence.coerceIn(0, 100))
+        } catch (t: Throwable) {
+            DiagnosticLog.e(TAG, "تشخیص با استثنا متوقف شد", t)
+            throw t
         } finally {
             progressSink = null
             // آزادکردن تصویرِ داخلیِ Tesseract تا حافظهٔ بومی انباشته نشود.
@@ -137,10 +174,12 @@ class TesseractEngine : Closeable {
 
     /** درخواست توقف تشخیصِ در حال اجرا (برای لغو از سمت کاربر). */
     fun requestStop() {
+        DiagnosticLog.i(TAG, "درخواست توقف تشخیص از سوی کاربر.")
         runCatching { api?.stop() }
     }
 
     override fun close() {
+        if (api != null) DiagnosticLog.d(TAG, "آزادسازی موتور Tesseract.")
         api?.let { runCatching { it.recycle() } }
         api = null
         initialisedWith = null

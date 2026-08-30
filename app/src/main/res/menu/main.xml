@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- همیشه روی نوار بالا دیده می‌شود؛ وقتی مشکلی پیش می‌آید کاربر باید سریع پیدایش کند. -->
+    <item
+        android:id="@+id/action_log"
+        android:icon="@drawable/ic_log"
+        android:title="@string/action_log"
+        app:showAsAction="always" />
+</menu>

@@ -38,6 +38,17 @@
             </intent-filter>
         </activity>
 
+        <!--
+            صفحهٔ گزارش اشکال‌یابی. exported=false است: هیچ اپ دیگری نباید بتواند
+            مستقیماً بازش کند، چون گزارش می‌تواند بخشی از متنِ کاربر را نشان دهد.
+        -->
+        <activity
+            android:name=".ui.LogActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
+            android:label="@string/log_title"
+            android:parentActivityName=".ui.MainActivity" />
+
         <!-- برای دادن URI امن به اپ دوربین و برای اشتراک‌گذاری خروجی -->
         <provider
             android:name="androidx.core.content.FileProvider"

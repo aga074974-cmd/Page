@@ -3,7 +3,6 @@ package ir.page.persianocr.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.page.persianocr.R
@@ -12,6 +11,7 @@ import ir.page.persianocr.image.ImagePreprocessor
 import ir.page.persianocr.image.OpenCvBootstrap
 import ir.page.persianocr.image.PreprocessResult
 import ir.page.persianocr.image.PreprocessStep
+import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.ocr.MissingTessDataException
 import ir.page.persianocr.ocr.OcrPhase
 import ir.page.persianocr.ocr.OcrRepository
@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
-        const val TAG = "MainViewModel"
+        const val TAG = "UI"
     }
 
     private val repository = OcrRepository(application)
@@ -55,6 +55,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** بارگذاری تصویر انتخاب‌شده از گالری یا دوربین و رفتن به مرحلهٔ برش. */
     fun onImagePicked(uri: Uri) {
+        DiagnosticLog.section("انتخاب تصویر")
         cancelRunning()
         runningJob = viewModelScope.launch {
             _uiState.update {
@@ -84,7 +85,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
-                Log.e(TAG, "Image load failed", t)
+                DiagnosticLog.e(TAG, "بارگذاری تصویر شکست خورد", t)
                 fail(UiError(messageRes = R.string.err_image_load))
             }
         }
@@ -98,11 +99,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun onCropConfirmed(cropped: Bitmap?) {
         val source = cropped ?: _uiState.value.sourceImage ?: return
+        DiagnosticLog.i(
+            TAG,
+            "تأیید برش — ناحیهٔ انتخابی: ${source.width}×${source.height}" +
+                if (cropped == null) " (بدون برش؛ کل تصویر)" else "",
+        )
         cancelRunning()
         runningJob = viewModelScope.launch {
             // بارگذاری کتابخانهٔ بومی (~۲۴ مگابایت) نباید روی نخ اصلی انجام شود.
             val openCvReady = withContext(Dispatchers.Default) { OpenCvBootstrap.ensureLoaded() }
             if (!openCvReady) {
+                DiagnosticLog.e(TAG, "OpenCV آماده نشد؛ پیش‌پردازش ممکن نیست.")
                 fail(UiError(messageRes = R.string.err_opencv))
                 return@launch
             }
@@ -144,10 +151,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } catch (e: CancellationException) {
+                DiagnosticLog.i(TAG, "پیش‌پردازش لغو شد.")
                 if (preprocessed !== produced) produced?.close()
                 throw e
             } catch (t: Throwable) {
-                Log.e(TAG, "Preprocessing failed", t)
+                DiagnosticLog.e(TAG, "پیش‌پردازش شکست خورد", t)
                 if (preprocessed !== produced) produced?.close()
                 releasePreprocessed()
                 fail(preprocessError(t))
@@ -158,6 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** تعویض حالت باینری‌سازیِ نمایش‌داده‌شده. */
     fun onMethodSelected(method: BinarizationMethod) {
         if (_uiState.value.selectedMethod == method) return
+        DiagnosticLog.d(TAG, "حالت نمایش تغییر کرد: ${method.name}")
         _uiState.update { it.copy(selectedMethod = method) }
         val result = preprocessed ?: return
         viewModelScope.launch {
@@ -166,9 +175,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onMultiPassChanged(enabled: Boolean) = _uiState.update { it.copy(multiPass = enabled) }
+    fun onMultiPassChanged(enabled: Boolean) {
+        DiagnosticLog.d(TAG, "اجرای چندگذره: $enabled")
+        _uiState.update { it.copy(multiPass = enabled) }
+    }
 
-    fun onSingleBlockChanged(enabled: Boolean) = _uiState.update { it.copy(singleBlockMode = enabled) }
+    fun onSingleBlockChanged(enabled: Boolean) {
+        DiagnosticLog.d(TAG, "حالت تک‌بلوک: $enabled")
+        _uiState.update { it.copy(singleBlockMode = enabled) }
+    }
 
     // ──────────────────────────── اجرای OCR ────────────────────────────
 
@@ -217,9 +232,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } catch (e: CancellationException) {
+                DiagnosticLog.i(TAG, "اجرای OCR لغو شد.")
                 throw e
             } catch (t: Throwable) {
-                Log.e(TAG, "OCR failed", t)
+                DiagnosticLog.e(TAG, "اجرای OCR شکست خورد", t)
                 fail(ocrError(t))
             }
         }
@@ -227,6 +243,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** لغو عملیات در حال اجرا. */
     fun onCancel() {
+        DiagnosticLog.i(TAG, "کاربر عملیات را لغو کرد.")
         repository.requestStop()
         cancelRunning()
         _uiState.update { it.copy(busy = false, progressPercent = null, statusRes = null, statusArg = null) }
@@ -234,6 +251,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** بازگشت به ابتدای جریان کار. */
     fun onRestart() {
+        DiagnosticLog.i(TAG, "بازگشت به ابتدای جریان کار.")
         cancelRunning()
         releasePreprocessed()
         _uiState.update { previous ->

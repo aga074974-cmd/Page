@@ -1,7 +1,8 @@
 package ir.page.persianocr.image
 
-import android.util.Log
+import ir.page.persianocr.log.DiagnosticLog
 import org.opencv.android.OpenCVLoader
+import org.opencv.core.Core
 
 /**
  * بارگذاری یک‌بارهٔ کتابخانهٔ بومی OpenCV.
@@ -15,7 +16,7 @@ import org.opencv.android.OpenCVLoader
  */
 object OpenCvBootstrap {
 
-    private const val TAG = "OpenCvBootstrap"
+    private const val TAG = "OpenCV"
 
     @Volatile
     private var state: Boolean? = null
@@ -24,14 +25,25 @@ object OpenCvBootstrap {
     @Synchronized
     fun ensureLoaded(): Boolean {
         state?.let { return it }
+
+        DiagnosticLog.i(TAG, "بارگذاری کتابخانهٔ بومی OpenCV ${OpenCVLoader.OPENCV_VERSION}…")
         val ok = try {
-            OpenCVLoader.initLocal()
+            DiagnosticLog.timed(TAG, "OpenCVLoader.initLocal()") { OpenCVLoader.initLocal() }
         } catch (t: Throwable) {
             // UnsatisfiedLinkError روی ABI پشتیبانی‌نشده در همین‌جا گرفته می‌شود.
-            Log.e(TAG, "OpenCV native load failed", t)
+            DiagnosticLog.e(TAG, "بارگذاری کتابخانهٔ بومی OpenCV شکست خورد", t)
             false
         }
-        if (!ok) Log.e(TAG, "OpenCVLoader.initLocal() returned false")
+
+        if (ok) {
+            // نسخهٔ واقعیِ کتابخانهٔ بومی — فقط پس از بارگذاری قابل خواندن است و
+            // اگر با نسخهٔ جاوا نخواند، ریشهٔ خطاهای عجیبِ بعدی همین‌جاست.
+            val native = runCatching { Core.getVersionString() }.getOrNull()
+            DiagnosticLog.i(TAG, "OpenCV آماده است — نسخهٔ بومی: ${native ?: "نامشخص"}")
+        } else {
+            DiagnosticLog.e(TAG, "OpenCVLoader.initLocal() مقدار false برگرداند (کتابخانهٔ بومی برای این معماری وجود ندارد؟)")
+        }
+
         state = ok
         return ok
     }

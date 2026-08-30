@@ -65,4 +65,27 @@
     <!-- توضیح تصویر برای دسترس‌پذیری -->
     <string name="cd_source_image">تصویر انتخاب‌شده برای برش</string>
     <string name="cd_preprocessed_image">تصویر پیش‌پردازش‌شده</string>
+    <!-- گزارش اشکال‌یابی -->
+    <string name="log_title">گزارش اشکال‌یابی</string>
+    <string name="action_log">گزارش اشکال‌یابی</string>
+    <string name="log_intro">هر کاری که اپ انجام می‌دهد اینجا ثبت می‌شود: اندازه‌ها، زمان‌ها، تصمیم‌های پیش‌پردازش، امتیاز هر حالت و متن هر خطا. اگر چیزی درست کار نکرد، همین گزارش را ذخیره کنید و بفرستید.</string>
+    <string name="log_privacy_note">توجه: گزارش بخشی از متنِ استخراج‌شده از تصویر شما را در بر دارد. پیش از فرستادن، یک بار آن را بخوانید.</string>
+    <string name="log_only_problems">فقط هشدارها و خطاها</string>
+    <string name="log_empty">هنوز رکوردی ثبت نشده است. یک تصویر را پردازش کنید و دوباره سر بزنید.</string>
+    <string name="log_summary">%1$d رکورد • فایل جلسه: %2$s</string>
+    <string name="log_summary_no_file">%1$d رکورد • ذخیره روی دیسک ممکن نشد (فقط در حافظه)</string>
+    <string name="log_previous_crash">اجرای قبلی با کرش تمام شده بود؛ متن آن در گزارش ذخیره‌شده آمده است.</string>
+    <string name="btn_log_save">ذخیره در فایل</string>
+    <string name="btn_log_share">ارسال</string>
+    <string name="btn_log_copy">کپی</string>
+    <string name="btn_log_clear">پاک‌کردن</string>
+    <string name="msg_log_saved">گزارش ذخیره شد.</string>
+    <string name="msg_log_copied">گزارش در کلیپ‌بورد کپی شد.</string>
+    <string name="msg_log_cleared">گزارش پاک شد.</string>
+    <string name="msg_log_share_title">ارسال گزارش اشکال‌یابی</string>
+    <string name="log_clear_confirm">رکوردهای نمایش‌داده‌شده پاک می‌شوند. فایل گزارشِ این جلسه روی حافظهٔ دستگاه دست‌نخورده می‌ماند.</string>
+    <string name="err_log_copy">کپی گزارش ممکن نشد (%1$s). به‌جایش «ذخیره در فایل» را بزنید.</string>
+    <string name="err_log_save">ذخیرهٔ گزارش ممکن نشد: %1$s</string>
+    <string name="err_log_share">ارسال گزارش ممکن نشد: %1$s</string>
+    <string name="cd_back">بازگشت</string>
 </resources>

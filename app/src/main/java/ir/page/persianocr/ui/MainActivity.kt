@@ -25,6 +25,7 @@ import com.google.android.material.snackbar.Snackbar
 import ir.page.persianocr.R
 import ir.page.persianocr.databinding.ActivityMainBinding
 import ir.page.persianocr.image.BinarizationMethod
+import ir.page.persianocr.log.DiagnosticLog
 import ir.page.persianocr.ocr.OcrResult
 import ir.page.persianocr.util.BitmapIo
 import kotlinx.coroutines.launch
@@ -88,6 +89,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun setUpControls() {
         with(binding) {
+            // نوار بالا به‌عنوان ActionBar ثبت نشده است، پس منو را مستقیم به خودش می‌دهیم.
+            toolbar.inflateMenu(R.menu.main)
+            toolbar.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    R.id.action_log -> {
+                        openLog()
+                        true
+                    }
+
+                    else -> false
+                }
+            }
+
             galleryButton.setOnClickListener {
                 pickImage.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -242,12 +256,19 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.app_name)
             .setMessage(message)
             .setPositiveButton(android.R.string.ok, null)
+            // دقیقاً همان‌جایی که کاربر خطا را می‌بیند، راهِ دیدنِ جزئیاتش را هم می‌دهیم.
+            .setNeutralButton(R.string.action_log) { _, _ -> openLog() }
             .setOnDismissListener {
                 errorDialogShowing = false
                 viewModel.onErrorShown()
             }
             .show()
         errorDialogShowing = true
+    }
+
+    private fun openLog() {
+        DiagnosticLog.d("UI", "باز کردن صفحهٔ گزارش اشکال‌یابی.")
+        startActivity(Intent(this, LogActivity::class.java))
     }
 
     // ─────────────────────── کپی و اشتراک‌گذاری ───────────────────────
