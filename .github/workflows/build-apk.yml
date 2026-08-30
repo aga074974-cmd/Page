@@ -1,0 +1,92 @@
+# ساخت APK در ابر — بدون نیاز به کامپیوتر.
+#
+# پس از هر پوش (یا اجرای دستی از تب Actions) این workflow فایل‌های زبان Tesseract را
+# دانلود می‌کند، تست‌ها را می‌گیرد، APK دیباگ را می‌سازد و آن را هم به‌عنوان artifact و
+# هم به‌عنوان یک Release با لینک مستقیم منتشر می‌کند تا مستقیماً از گوشی قابل نصب باشد.
+name: Build APK
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+  # اجازهٔ اجرای دستی از تب Actions در گیت‌هاب (روی گوشی هم کار می‌کند)
+  workflow_dispatch:
+
+permissions:
+  contents: write   # برای انتشار Release لازم است
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: دریافت کد
+        uses: actions/checkout@v4
+
+      - name: نصب JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: آماده‌سازی Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: آماده‌سازی Gradle (با کش)
+        uses: gradle/actions/setup-gradle@v4
+
+      # فایل‌های traineddata در مخزن نگه‌داری نمی‌شوند (۱۵٫۸ مگابایت)، پس اینجا
+      # از tessdata_best گرفته می‌شوند. این تنها مرحله‌ای است که به شبکه نیاز دارد؛
+      # خودِ اپ روی دستگاه کاملاً آفلاین است.
+      - name: دریافت فایل‌های زبان (tessdata_best)
+        run: |
+          set -euo pipefail
+          DEST=app/src/main/assets/tessdata
+          mkdir -p "$DEST"
+          for LANG in fas ara; do
+            curl -fSL --retry 3 --retry-delay 2 \
+              -o "$DEST/$LANG.traineddata" \
+              "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/$LANG.traineddata"
+          done
+          ls -l "$DEST"
+
+      - name: تست‌های واحد
+        run: ./gradlew :app:test --stacktrace
+
+      - name: ساخت APK دیباگ
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: گزارش خروجی
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          ls -lh "$APK"
+          echo "### ✅ APK ساخته شد" >> "$GITHUB_STEP_SUMMARY"
+          echo "اندازه: $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: بارگذاری APK به‌عنوان artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # Release یک لینک دانلود مستقیمِ .apk می‌دهد (بدون zip) که روی گوشی
+      # با یک کلیک نصب می‌شود. تگ ثابت است تا لینک همیشه یکی بماند.
+      - name: انتشار به‌صورت Release با لینک مستقیم
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES="ساخته‌شده از ${GITHUB_SHA::7} روی برنچ ${GITHUB_REF_NAME}."
+          NOTES="$NOTES"$'\n\n'"نصب: فایل app-debug.apk را روی گوشی دانلود کنید و روی آن بزنید."
+          NOTES="$NOTES"$'\n'"اگر اندروید اجازه نداد، در تنظیمات «نصب برنامه‌های ناشناس» را برای مرورگرتان روشن کنید."
+          gh release delete debug-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create debug-latest \
+            app/build/outputs/apk/debug/app-debug.apk \
+            --title "آخرین بیلد دیباگ" \
+            --notes "$NOTES" \
+            --prerelease
+          echo "لینک مستقیم: https://github.com/${GITHUB_REPOSITORY}/releases/download/debug-latest/app-debug.apk" >> "$GITHUB_STEP_SUMMARY"
