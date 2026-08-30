@@ -72,7 +72,7 @@
     <string name="msg_log_copied">Report copied to the clipboard.</string>
     <string name="msg_log_cleared">Log cleared.</string>
     <string name="msg_log_share_title">Send the diagnostic log</string>
-    <string name="log_clear_confirm">The displayed records will be cleared. This session's log file on device storage is left untouched.</string>
+    <string name="log_clear_confirm">The displayed records will be cleared. The log file for this session on device storage is left untouched.</string>
     <string name="err_log_copy">Could not copy the report (%1$s). Use “Save to file” instead.</string>
     <string name="err_log_save">Could not save the report: %1$s</string>
     <string name="err_log_share">Could not send the report: %1$s</string>
