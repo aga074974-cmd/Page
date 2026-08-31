@@ -98,4 +98,16 @@ class ConfusionCorrectorTest {
         // ولی توکنی که خودش واژه است همچنان دست‌نخورده می‌ماند.
         assertEquals("که", fix("که"))
     }
+
+    @Test
+    fun `a clearly dominant candidate wins over an ambiguous one`() {
+        // «یول» هم «پول» می‌دهد و هم «بول»؛ هر دو واژه‌اند. با اختلافِ بسامدِ
+        // بزرگ، «پول» انتخاب می‌شود.
+        val skewed = SetLexicon(mapOf("پول" to 9, "بول" to 5))
+        assertEquals("پول", ConfusionCorrector.correct("یول", skewed).text)
+
+        // ولی وقتی دو نامزد هم‌وزن‌اند، توکن دست‌نخورده می‌ماند.
+        val even = SetLexicon(mapOf("پول" to 7, "بول" to 7))
+        assertEquals("یول", ConfusionCorrector.correct("یول", even).text)
+    }
 }

@@ -57,6 +57,9 @@ object ConfusionCorrector {
     /** نامزد باید این‌قدر بازهٔ بسامدی بالاتر باشد تا جای واژهٔ شناخته‌شده را بگیرد. */
     const val DEMOTE_MIN_GAP = 4
 
+    /** وقتی چند نامزد هست، برنده باید این‌قدر از نفرِ دوم پرتکرارتر باشد. */
+    const val DOMINANT_GAP = 3
+
     /**
      * جفت‌های حروفِ هم‌شکل که OCR بینشان اشتباه می‌کند.
      *
@@ -160,7 +163,7 @@ object ConfusionCorrector {
             tokenBand in 1..DEMOTE_MAX_BAND
         if (lexicon.contains(token) && !demotable) return null
 
-        var found: String? = null
+        val found = LinkedHashSet<String>(2)
         val chars = token.toCharArray()
         for (i in chars.indices) {
             val alternatives = ALTERNATIVES[chars[i]] ?: continue
@@ -169,18 +172,23 @@ object ConfusionCorrector {
                 chars[i] = alternative
                 val candidate = String(chars)
                 if (demotable && lexicon.band(candidate) - tokenBand < DEMOTE_MIN_GAP) continue
-                if (accept(candidate)) {
-                    // نامزدِ دوم یعنی ابهام: با هیچ اطمینانی نمی‌شود یکی را انتخاب کرد.
-                    if (found != null && found != candidate) {
-                        chars[i] = original
-                        return token
-                    }
-                    found = candidate
-                }
+                if (accept(candidate)) found += candidate
             }
             chars[i] = original
         }
-        return found ?: token
+
+        if (found.size == 1) return found.first()
+        if (found.isEmpty()) return token
+
+        // ── چند نامزد ────────────────────────────────────────────────────────
+        // ابهام معمولاً یعنی «دست نزن». استثنا وقتی است که یکی از نامزدها
+        // به‌روشنی بر بقیه می‌چربد: «یول» هم «پول» می‌شود و هم «بول»، ولی «پول»
+        // ده‌ها برابر رایج‌تر است. با اختلافِ [DOMINANT_GAP] بازه (~۳۰ برابر)
+        // انتخابش امن است؛ کمتر از آن، توکن دست‌نخورده می‌ماند.
+        val ranked = found.sortedByDescending { lexicon.band(it) }
+        val best = ranked[0]
+        val runnerUp = ranked[1]
+        return if (lexicon.band(best) - lexicon.band(runnerUp) >= DOMINANT_GAP) best else token
     }
 
     /** حروفِ فارسی/عربی و نیم‌فاصله، یعنی چیزهایی که «داخلِ یک کلمه»اند. */

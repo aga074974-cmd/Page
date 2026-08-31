@@ -18,6 +18,7 @@ internal object PersianVerbStems {
      */
     val PRESENT: Set<String> = setOf(
         "کن", "شو", "رو", "آی", "گو", "بین", "دان", "توان", "خواه", "دار", "ده",
+        "هست", "باش",
         "گیر", "بر", "آور", "خور", "زن", "کش", "رس", "افت", "خیز", "مان", "نویس",
         "خوان", "پرس", "فروش", "خر", "ساز", "یاب", "شناس", "فهم", "بخش", "گذار",
         "گرد", "ایست", "نشین", "پوش", "بند", "شکن", "سوز", "ریز", "پرد", "جه",
@@ -50,8 +51,16 @@ internal object PersianVerbStems {
         "اندوخت", "پیوست", "تابید", "چسبید", "خراشید", "دمید", "لغزید",
     )
 
-    /** شناسه‌های فعل، از بلند به کوتاه (ترتیب برای تطبیقِ حریصانه مهم است). */
-    val ENDINGS: List<String> = listOf("یم", "ید", "ند", "م", "ی", "د")
+    /**
+     * شناسه‌های فعل، از بلند به کوتاه (ترتیب برای تطبیقِ حریصانه مهم است).
+     *
+     * صورت‌های واکه‌دار («گویند» = گو + یند) هم هستند، وگرنه «بگویند» و «می‌گویید»
+     * فعل شمرده نمی‌شدند.
+     */
+    val ENDINGS: List<String> = listOf("ییم", "یید", "یند", "یم", "ید", "ند", "م", "ی", "د")
+
+    /** پیشوندهای فعلی که پیش از ریشه می‌آیند: «بگویند»، «نگفت». */
+    val PREFIXES: List<String> = listOf("نمی", "می", "بی", "ب", "ن")
 
     /**
      * آیا [stem] صرفِ یک فعل است؟
@@ -66,6 +75,21 @@ internal object PersianVerbStems {
             val root = stem.dropLast(ending.length)
             if (root.isEmpty()) continue
             if (root in PRESENT || root in PAST) return true
+        }
+        return false
+    }
+
+    /**
+     * آیا این *کلمه* صورتی از یک فعل است؟ برخلاف [isConjugated]، پیشوندِ فعلی
+     * را هم می‌پذیرد. فقط در ساختِ فایلِ واژگان به کار می‌رود، نه در درجِ نیم‌فاصله
+     * (آنجا پیشوند جداگانه تشخیص داده می‌شود).
+     */
+    fun isVerbForm(word: String): Boolean {
+        if (isConjugated(word)) return true
+        for (prefix in PREFIXES) {
+            if (!word.startsWith(prefix)) continue
+            val rest = word.substring(prefix.length)
+            if (rest.length >= 2 && isConjugated(rest)) return true
         }
         return false
     }
