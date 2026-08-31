@@ -12,7 +12,8 @@ class ConfusionCorrectorTest {
 
     private val lexicon: PersianLexicon = SetLexicon(
         setOf(
-            "نگرش", "گوید", "همچنین", "انرژی", "پرسم", "بستگی", "رفتار",
+            "نگرش", "گوید", "میگوید", "همچنین", "انرژی", "پرسم", "میپرسم", "بستگی", "رفتار",
+            "پول", "چه",
             "فروش", "مشتری", "کرم", "گرم", "خرید", "دارد",
         ),
     )
@@ -75,5 +76,26 @@ class ConfusionCorrectorTest {
     @Test
     fun `an empty lexicon disables the module entirely`() {
         assertEquals("نکرش", ConfusionCorrector.correct("نکرش", PersianLexicon.EMPTY).text)
+    }
+
+    @Test
+    fun `a candidate must be in the list itself, not reachable through affixes`() {
+        // «رسوم» واژه است، پس «می + رسوم» از راهِ صرفی تأیید می‌گرفت و «میرشوم»
+        // به «میرسوم» تبدیل می‌شد. با بررسیِ دقیق، این اتفاق نمی‌افتد.
+        val withStem = SetLexicon(setOf("رسوم", "شوم"))
+        assertEquals("میرشوم", ConfusionCorrector.correct("میرشوم", withStem).text)
+    }
+
+    @Test
+    fun `the peh-yeh pair is corrected`() {
+        // «یول» → «پول»: سه نقطهٔ زیرِ پ در برابر دو نقطهٔ ی.
+        assertEquals("پول", fix("یول"))
+    }
+
+    @Test
+    fun `two-letter tokens are corrected too`() {
+        assertEquals("چه", fix("جه"))
+        // ولی توکنی که خودش واژه است همچنان دست‌نخورده می‌ماند.
+        assertEquals("که", fix("که"))
     }
 }

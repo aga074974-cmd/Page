@@ -27,14 +27,18 @@ object AssetLexicon {
             cached?.let { return it }
             val loaded = runCatching {
                 DiagnosticLog.timed(TAG, "بارگذاری فرهنگ واژگان") {
-                    val words = HashSet<String>(48_000)
+                    // هر خط: «واژه» و یک رقمِ بازهٔ بسامد (۰..۹).
+                    val bands = HashMap<String, Int>(48_000)
                     context.assets.open(PATH).bufferedReader().useLines { lines ->
                         lines.forEach { line ->
-                            val word = line.trim()
-                            if (word.length >= 2) words += word
+                            val space = line.lastIndexOf(' ')
+                            if (space <= 1) return@forEach
+                            val word = line.substring(0, space)
+                            if (word.length < 2) return@forEach
+                            bands[word] = line.substring(space + 1).trim().toIntOrNull() ?: 0
                         }
                     }
-                    SetLexicon(words) as PersianLexicon
+                    SetLexicon(bands) as PersianLexicon
                 }
             }.getOrElse {
                 DiagnosticLog.w(TAG, "فرهنگ واژگان خوانده نشد؛ اصلاحِ واژگانی غیرفعال می‌ماند.", it)

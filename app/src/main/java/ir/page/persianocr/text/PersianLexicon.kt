@@ -11,6 +11,26 @@ interface PersianLexicon {
     /** آیا این واژه (یا شکلِ صرف‌شده‌اش) در فرهنگ هست؟ */
     fun contains(word: String): Boolean
 
+    /**
+     * آیا این واژه **عیناً** در فهرست هست؟ بدونِ برداشتنِ پیشوند/پسوند.
+     *
+     * برای پذیرشِ یک جانشینیِ حرفی همین سخت‌گیری لازم است: «میرشوم» با یک
+     * جانشینی «میرسوم» می‌شود و [contains] آن را «می + رسوم» می‌خواند و تأیید
+     * می‌کند — در حالی که «میرسوم» واژه نیست. هر اصلاحِ *درستی* هم که در گزارش‌ها
+     * دیده شد، هدفش عیناً در فهرست بود.
+     */
+    fun containsExact(word: String): Boolean
+
+    /**
+     * بازهٔ بسامدِ واژه: ۰ (ناشناخته) تا ۹ (پرتکرارترین‌ها)، لگاریتمی.
+     *
+     * فقط یک جا استفاده می‌شود: وقتی برای یک توکن هم جانشینیِ حرف ممکن است و هم
+     * درجِ فاصله، پرتکرارتر برنده می‌شود. بسامد برای *رد‌کردن* یک جانشینی به کار
+     * نمی‌رود؛ روی داده‌های واقعی هیچ آستانه‌ای درست از غلط جدا نمی‌کرد
+     * («میگوید» بسامدِ کمتری از «مجری» دارد).
+     */
+    fun band(word: String): Int
+
     /** تعداد واژه‌های پایه — فقط برای گزارش. */
     val size: Int
 
@@ -18,6 +38,8 @@ interface PersianLexicon {
         /** فرهنگِ خالی: همه‌چیز ناشناخته است، پس هیچ اصلاحی انجام نمی‌شود. */
         val EMPTY: PersianLexicon = object : PersianLexicon {
             override fun contains(word: String) = false
+            override fun containsExact(word: String) = false
+            override fun band(word: String) = 0
             override val size = 0
         }
     }
@@ -36,11 +58,18 @@ interface PersianLexicon {
  * تغییر می‌زند (واژهٔ اصلی شناخته می‌شود، یا نامزدها بیش از یکی می‌شوند و
  * ابهام باعث انصراف می‌شود). یعنی خطا به‌سمتِ «دست‌نزدن» می‌افتد، نه «خراب‌کردن».
  */
-class SetLexicon(words: Set<String>) : PersianLexicon {
+class SetLexicon(private val bands: Map<String, Int>) : PersianLexicon {
 
-    private val words: Set<String> = words
+    /** سازندهٔ راحت برای تست‌ها: همهٔ واژه‌ها با بسامدِ متوسط. */
+    constructor(words: Set<String>) : this(words.associateWith { DEFAULT_BAND })
 
-    override val size: Int get() = words.size
+    override val size: Int get() = bands.size
+
+    override fun containsExact(word: String): Boolean =
+        PersianTextNormalizer.lexiconKey(word) in bands
+
+    override fun band(word: String): Int =
+        bands[PersianTextNormalizer.lexiconKey(word)] ?: 0
 
     override fun contains(word: String): Boolean {
         if (baseContains(word)) return true
@@ -63,22 +92,25 @@ class SetLexicon(words: Set<String>) : PersianLexicon {
     private fun baseContains(word: String): Boolean {
         val key = PersianTextNormalizer.lexiconKey(word)
         if (key.length < 2) return false
-        if (key in words) return true
+        if (key in bands) return true
 
         for (prefix in PREFIXES) {
             if (key.length > prefix.length + 1 && key.startsWith(prefix)) {
-                if (key.removePrefix(prefix) in words) return true
+                if (key.removePrefix(prefix) in bands) return true
             }
         }
         for (suffix in SUFFIXES) {
             if (key.length - suffix.length >= MIN_STEM && key.endsWith(suffix)) {
-                if (key.dropLast(suffix.length) in words) return true
+                if (key.dropLast(suffix.length) in bands) return true
             }
         }
         return false
     }
 
     companion object {
+        /** بسامدِ پیش‌فرضِ سازندهٔ تستی. */
+        private const val DEFAULT_BAND = 5
+
         /** کمینهٔ طولِ ریشه پس از برداشتنِ پسوند. */
         private const val MIN_STEM = 3
 
@@ -90,7 +122,9 @@ class SetLexicon(words: Set<String>) : PersianLexicon {
          * دستِ‌کم یکی از پاره‌ها باید از این فهرست باشد.
          */
         private val AFFIX_PARTS = setOf(
-            "می", "نمی", "بی", "ها", "های", "هایی", "تر", "ترین", "ای", "به", "که",
+            "می", "نمی", "بی", "ها", "های", "هایی", "تر", "ترین",
+            "ای", "ایم", "اید", "اند", "ام", "ات", "اش", "است",
+            "به", "که",
         )
 
         /** پیشوندهای پرکاربردِ فعلی/نفی. ترتیب مهم است: بلندتر اول. */
@@ -101,6 +135,7 @@ class SetLexicon(words: Set<String>) : PersianLexicon {
             "هایی", "های", "ها",
             "ترین", "تر",
             "مان", "تان", "شان",
+            "ایم", "اید", "اند",
             "ام", "ات", "اش",
             "ی",
         )

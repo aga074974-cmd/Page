@@ -68,6 +68,18 @@ object PersianSpellCorrector {
     /** برای ادغام، دستِ‌کم یکی از دو توکن باید از این کوتاه‌تر یا برابر باشد. */
     private const val MAX_MERGE_PART = 4
 
+    /** چند بار می‌شود پاره‌های یک شکست را دوباره شکست. */
+    private const val MAX_SPLIT_DEPTH = 2
+
+    /** کمینهٔ بازهٔ بسامدِ پاره‌ها تا شکستن بر جانشینی مقدم شود. */
+    private const val SPLIT_WINS_BAND = 7
+
+    /** دستِ‌کم یک پارهٔ هر شکست باید این‌قدر پرتکرار باشد (یا حرفِ ربط). */
+    private const val COMMON_PART_BAND = 7
+
+    /** بالاتر از این بازه، شکلِ چسبیده خودش واژهٔ رایجی است و نیم‌فاصله نمی‌گیرد. */
+    private const val NOMINAL_ZWNJ_MAX_BAND = 6
+
     /** کمینهٔ طولِ ریشه پس از «می»/«نمی» برای درجِ نیم‌فاصله. */
     private const val MIN_ZWNJ_STEM = 3
 
@@ -145,37 +157,94 @@ object PersianSpellCorrector {
             // اعداد و هر توکنِ آمیخته با رقم، دست‌نخورده.
             if (original.any(Char::isDigit)) continue
 
-            if (isWord(original, lexicon)) {
-                // حتی واژهٔ شناخته‌شده ممکن است نیم‌فاصله کم داشته باشد.
-                if (options.zwnj) {
-                    val withZwnj = insertZwnj(original)
-                    if (withZwnj != null) {
-                        piece.text = withZwnj
-                        corrections += Correction(CorrectionKind.ZWNJ, original, withZwnj)
-                    }
-                }
-                continue
-            }
-
-            // ترتیب عمدی، و روی متنِ واقعی سنجیده شده: جانشینی پیش از شکستن.
-            // وقتی هر دو ممکن‌اند، خطای حرفی محتمل‌تر است — «همجنین» با جانشینی
-            // «همچنین» می‌شود ولی با شکستن «هم جنین»، که بی‌معناست. بهایش این است
-            // که «یاممکن» به‌جای «یا ممکن» می‌شود «ناممکن»؛ معاملهٔ به‌صرفه‌ای است،
-            // چون جفت‌های حرفیْ خطای غالبِ این موتور روی خط فارسی‌اند.
-            val fixed = (if (options.zwnj) insertZwnj(original) else null)
-                ?: (if (options.substitute) substitute(original, lexicon) else null)
-                ?: (if (options.split) split(original, lexicon) else null)
-
-            when {
-                fixed == null -> unresolved++
-                else -> {
-                    piece.text = fixed
-                    corrections += Correction(kindOf(original, fixed), original, fixed)
-                }
+            val staged = ArrayList<Correction>()
+            val fixed = repair(original, lexicon, options, staged, depth = 0)
+            if (fixed == original) {
+                if (!isWord(original, lexicon)) unresolved++
+            } else {
+                piece.text = fixed
+                corrections += staged
             }
         }
 
         return pieces.joinToString("") { it.text } to unresolved
+    }
+
+    /**
+     * اصلاحِ یک توکن — **زنجیره‌ای**.
+     *
+     * ── چرا زنجیره ───────────────────────────────────────────────────────────
+     * نسخهٔ اول به هر توکن فقط *یک* اصلاح می‌داد و همان‌جا رها می‌کرد. روی متنِ
+     * واقعی این یعنی «میکوید» تا «میگوید» درست می‌شد و نیم‌فاصله‌اش دیگر هرگز
+     * گذاشته نمی‌شد. حالا مرحله‌ها پشت‌سر هم اجرا می‌شوند و پاره‌های حاصل از شکستن
+     * دوباره از همین مسیر می‌گذرند، پس «جونمیدانید» می‌تواند سه اصلاح بگیرد:
+     * ج→چ، سپس درجِ فاصله، سپس نیم‌فاصله روی «میدانید».
+     */
+    private fun repair(
+        token: String,
+        lexicon: PersianLexicon,
+        options: SpellOptions,
+        corrections: MutableList<Correction>,
+        depth: Int,
+    ): String {
+        var current = token
+
+        run {
+            // جانشینی روی واژهٔ شناخته‌شده هم صدا زده می‌شود: خودِ
+            // [ConfusionCorrector] تصمیم می‌گیرد که آیا آن واژه آن‌قدر کم‌تکرار
+            // هست که جای خود را به یک نامزدِ بسیار پرتکرارتر بدهد («یول» → «پول»).
+            // شکستن ولی فقط روی توکنِ ناشناخته انجام می‌شود.
+            val unknown = !isWord(current, lexicon)
+            val substituted = if (options.substitute) substitute(current, lexicon) else null
+            val divided = if (options.split && unknown && depth < MAX_SPLIT_DEPTH) {
+                split(current, lexicon)
+            } else {
+                null
+            }
+
+            // وقتی هر دو ممکن‌اند، پیش‌فرض *جانشینی* است: خطای حرفی خطای غالبِ این
+            // موتور روی خط فارسی است. شکستن فقط وقتی برنده می‌شود که هر دو پاره‌اش
+            // واژه‌های بسیار پرتکراری باشند و هدفِ جانشینی کم‌تکرار.
+            //
+            // آستانهٔ [SPLIT_WINS_BAND] از خودِ داده درآمده: در گزارشِ واقعی هر
+            // شکستِ *غلط* کمینهٔ بازهٔ ۵ یا کمتر داشت (میک+وید، آن+رزی، هم+جنین) و
+            // تنها شکستِ *درست* کمینهٔ ۷ (یا+ممکن).
+            val chosen = when {
+                substituted != null && divided != null -> {
+                    val splitBand = divided.split(' ').minOf { lexicon.band(it) }
+                    val substitutionBand = lexicon.band(substituted)
+                    if (splitBand >= SPLIT_WINS_BAND && splitBand > substitutionBand) {
+                        divided
+                    } else {
+                        substituted
+                    }
+                }
+
+                substituted != null -> substituted
+                else -> divided
+            }
+
+            if (chosen != null && chosen != current) {
+                corrections += Correction(kindOf(current, chosen), current, chosen)
+                // پاره‌های یک شکست، هرکدام دوباره از ابتدای همین مسیر می‌گذرند —
+                // پاره‌ها واژه‌های تأییدشده‌اند، پس این بازگشت امن است.
+                if (chosen.contains(' ')) {
+                    return chosen.split(' ')
+                        .joinToString(" ") { repair(it, lexicon, options, corrections, depth + 1) }
+                }
+                // پس از جانشینی فقط نیم‌فاصله می‌آید، نه شکستنِ دوباره.
+                current = chosen
+            }
+        }
+
+        // نیم‌فاصله همیشه آخر می‌آید و روی واژهٔ شناخته‌شده هم اجرا می‌شود.
+        if (options.zwnj) {
+            insertZwnj(current, lexicon)?.let {
+                corrections += Correction(CorrectionKind.ZWNJ, current, it)
+                current = it
+            }
+        }
+        return current
     }
 
     private fun kindOf(before: String, after: String): CorrectionKind = when {
@@ -186,9 +255,23 @@ object PersianSpellCorrector {
 
     // ─────────────────── ۱) جانشینیِ حروفِ هم‌شکل ───────────────────
 
-    /** واگذارشده به [ConfusionCorrector] که همین کار را جداگانه و تست‌شده می‌کند. */
+    /**
+     * واگذارشده به [ConfusionCorrector]، با یک گشایشِ *باریک*: نامزد می‌تواند
+     * به‌جای واژه‌بودن، با درجِ نیم‌فاصله معنا پیدا کند — همین «کشادهتر» را به
+     * «گشاده‌تر» می‌رساند.
+     *
+     * ⚠ «قابلِ شکستن‌بودن» عمداً معیارِ پذیرش **نیست**. یک بار امتحان شد و روی متنِ
+     * واقعی فاجعه بود: در واژه‌نامه‌ای با ۳۷ هزار واژه تقریباً هر آشغالی به دو واژه
+     * می‌شکند، پس «آنرژی» به «آن رزی» و «کهبه‌راحتی» به «که به‌راحتن» تبدیل شد.
+     */
     private fun substitute(token: String, lexicon: PersianLexicon): String? {
-        val fixed = ConfusionCorrector.correctToken(token, lexicon)
+        val fixed = ConfusionCorrector.correctToken(token, lexicon) { candidate ->
+            // فقط مسیرِ *اسمی*: «گشادهتر» با ریشهٔ «گشاده» تأیید می‌شود.
+            // مسیرِ فعلی عمداً کنار گذاشته شده — «هر می + فعلِ صرف‌شده» فضای
+            // بسیار بزرگی است و «میکوید» را با دو نامزد («میگوید» و «می‌کوبد»)
+            // مبهم می‌کرد، پس هیچ اصلاحی انجام نمی‌شد.
+            lexicon.containsExact(candidate) || nominalZwnj(candidate, lexicon) != null
+        }
         return if (fixed != null && fixed != token) fixed else null
     }
 
@@ -206,7 +289,7 @@ object PersianSpellCorrector {
         val bare = token
         if (bare.length < MIN_SPLIT_LENGTH) return null
 
-        var found: String? = null
+        val candidates = ArrayList<String>(2)
         for (cut in 1 until bare.length) {
             // نیم‌فاصله یعنی «این دو تکه *یک* کلمه‌اند»؛ درست همان‌جا نباید برید.
             // بدونِ این شرط «به‌شدت» و «به‌عنوان» دو نیم می‌شدند، چون هر دو پاره‌شان
@@ -230,11 +313,31 @@ object PersianSpellCorrector {
             }
             if (!tailOk) continue
 
-            val candidate = "$head $tail"
-            if (found != null && found != candidate) return null // ابهام
-            found = candidate
+            // ★ کفِ «واقعی‌بودن»: دستِ‌کم یک پاره باید حرفِ ربط یا واژه‌ای پرتکرار
+            // باشد. در واژه‌نامه‌ای با ۳۷ هزار واژه تقریباً هر آشغالی به دو واژهٔ
+            // کم‌تکرار می‌شکند؛ روی متنِ واقعی هر ۱۶ شکستِ درست از این کف رد شدند
+            // و هر دو شکستِ غلط («متر شوم»، «میک وید») زیرش ماندند.
+            val common = head in FUNCTION_WORDS || tail in FUNCTION_WORDS ||
+                lexicon.band(head) >= COMMON_PART_BAND || lexicon.band(tail) >= COMMON_PART_BAND
+            if (!common) continue
+
+            candidates += "$head $tail"
         }
-        return found
+
+        return when {
+            candidates.size == 1 -> candidates.single()
+            candidates.isEmpty() -> null
+            else -> {
+                // ابهام. خطای واقعی تقریباً همیشه فاصله‌ای است که کنارِ یک حرفِ
+                // ربط افتاده، پس نامزدی که یک پاره‌اش حرفِ ربط است ترجیح دارد:
+                // «شده‌ایمکه» هم «شده‌ای + مکه» می‌دهد و هم «شده‌ایم + که»؛ دومی
+                // درست است و تنها چیزی که جدایشان می‌کند همین است.
+                val preferred = candidates.filter { candidate ->
+                    candidate.split(' ').any { it in FUNCTION_WORDS }
+                }
+                preferred.singleOrNull()
+            }
+        }
     }
 
     // ─────────────────── ۳) ادغامِ فاصلهٔ اضافی ───────────────────
@@ -308,7 +411,11 @@ object PersianSpellCorrector {
      *
      * @return شکلِ اصلاح‌شده، یا `null` اگر چیزی برای درج نبود.
      */
-    internal fun insertZwnj(token: String): String? {
+    internal fun insertZwnj(token: String, lexicon: PersianLexicon): String? =
+        verbalZwnj(token) ?: nominalZwnj(token, lexicon)
+
+    /** پیشوندِ فعلی: «میدهید» → «می‌دهید». */
+    private fun verbalZwnj(token: String): String? {
         if (token.contains(ZWNJ)) return null
         for (prefix in PREFIXES) {
             if (!token.startsWith(prefix)) continue
@@ -320,8 +427,47 @@ object PersianSpellCorrector {
         return null
     }
 
+    /** پسوندِ اسمی: «جوابها» → «جواب‌ها»، «مهمترین» → «مهم‌ترین». */
+    private fun nominalZwnj(token: String, lexicon: PersianLexicon): String? {
+        if (token.contains(ZWNJ)) return null
+        //
+        // شرطِ بسامد مهم است: واژه‌ای که *چسبیده* هم پرتکرار است، همان‌طور نوشته
+        // می‌شود و پسوندش پسوند نیست. «تنها» و «بیشتر» را قیدِ طولِ ریشه می‌گیرد،
+        // ولی «کارها» را فقط بسامد.
+        if (token in ZWNJ_EXCEPTIONS) return null
+        if (lexicon.band(token) > NOMINAL_ZWNJ_MAX_BAND) return null
+        for (suffix in NOMINAL_SUFFIXES) {
+            if (!token.endsWith(suffix)) continue
+            val stem = token.dropLast(suffix.length)
+            if (stem.length < MIN_NOMINAL_STEM) continue
+            if (!lexicon.containsExact(stem)) continue
+            return stem + ZWNJ + suffix
+        }
+        return null
+    }
+
     /** بلندتر اول، تا «نمی» پیش از «می» تطبیق بخورد. */
     private val PREFIXES = listOf("نمی", "می")
+
+    /** پسوندهایی که در املای معیار با نیم‌فاصله می‌چسبند. بلندتر اول. */
+    private val NOMINAL_SUFFIXES = listOf("هایی", "های", "ها", "ترین", "تر")
+
+    /** کمینهٔ طولِ ریشه پیش از پسوندِ اسمی. */
+    private const val MIN_NOMINAL_STEM = 3
+
+    /**
+     * واژه‌هایی که *پایانه‌شان* شبیه پسوند است ولی پسوند نیست.
+     *
+     * «تنها» به «تن‌ها» و «بیشتر» به «بیش‌تر» تبدیل نمی‌شود. قیدِ «ریشه دستِ‌کم
+     * سه حرف» بیشترِ دام‌ها را خودش می‌گیرد («بهتر»، «کمتر»، «دفتر»، «دختر» ریشهٔ
+     * دوحرفی دارند)؛ این فهرست برای بقیه است.
+     */
+    private val ZWNJ_EXCEPTIONS: Set<String> = setOf(
+        "بیشتر", "بیشترین", "کمترین", "برترین", "تنها", "تنهایی", "رهایی",
+        "اشتها", "انتها", "انتهای", "ابتدا", "بهایی", "دنیای", "دنیا",
+        // قیدهایی که در عمل همیشه چسبیده نوشته می‌شوند.
+        "بارها", "کارها", "چیزها", "حرفها", "بعدها", "گاهها",
+    )
 
     // ─────────────────── تکه‌کردنِ خط ───────────────────
 

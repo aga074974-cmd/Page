@@ -27,6 +27,9 @@ data class CorrectionReport(
  *
  * سه محافظِ دیگر:
  *  • توکنی که خودش در فرهنگ هست هرگز تغییر نمی‌کند (پس «کرم» به «گرم» نمی‌شود).
+ *  • نامزد باید **عیناً** در فهرست باشد ([PersianLexicon.containsExact])، نه از راهِ
+ *    برداشتنِ پیشوند/پسوند: وگرنه «میرشوم» به «میرسوم» تبدیل می‌شد، چون «رسوم»
+ *    واژه است و «می + رسوم» تأیید می‌گرفت.
  *  • توکن‌های کوتاه‌تر از [MIN_LENGTH] دست نمی‌خورند — بین کلمه‌های دو-سه حرفی
  *    فاصلهٔ ویرایشیِ ۱ آن‌قدر زیاد است که هر تصمیمی قمار می‌شود.
  *  • فقط *جانشینی* انجام می‌شود، نه درج و حذف؛ خطای OCR روی خط فارسی تقریباً
@@ -37,8 +40,22 @@ data class CorrectionReport(
  */
 object ConfusionCorrector {
 
-    /** کوتاه‌تر از این طول، اصلاح نمی‌شود. */
-    const val MIN_LENGTH = 3
+    /**
+     * کوتاه‌تر از این طول، اصلاح نمی‌شود.
+     *
+     * ۲ است نه ۳: «جه» باید «چه» شود. خطرِ توکنِ دوحرفی کم است چون فقط توکن‌های
+     * *بیرونِ* واژه‌نامه بررسی می‌شوند و «که»، «به»، «بد» و مانندشان واژه‌اند.
+     */
+    const val MIN_LENGTH = 2
+
+    /** کوتاه‌تر از این، واژهٔ *شناخته‌شده* هرگز جایگزین نمی‌شود. */
+    const val MIN_DEMOTE_LENGTH = 3
+
+    /** بالاتر از این بازه، واژهٔ شناخته‌شده آن‌قدر رایج هست که دست نخورد. */
+    const val DEMOTE_MAX_BAND = 5
+
+    /** نامزد باید این‌قدر بازهٔ بسامدی بالاتر باشد تا جای واژهٔ شناخته‌شده را بگیرد. */
+    const val DEMOTE_MIN_GAP = 4
 
     /**
      * جفت‌های حروفِ هم‌شکل که OCR بینشان اشتباه می‌کند.
@@ -48,6 +65,7 @@ object ConfusionCorrector {
      */
     private val CONFUSABLE: List<Pair<Char, Char>> = listOf(
         'ک' to 'گ',   // سرکش
+        'پ' to 'ی',   // سه نقطهٔ زیر در برابر دو نقطه — «یول» به‌جای «پول»
         'ج' to 'چ',   // تعداد نقطه
         'ز' to 'ژ',   // تعداد نقطه
         'ر' to 'ز',   // بود/نبودِ نقطه
@@ -119,10 +137,28 @@ object ConfusionCorrector {
      * @return `null` اگر توکن اصلاً نامزدِ بررسی نبود (کوتاه، یا از قبل شناخته‌شده)،
      *   خودِ توکن اگر بررسی شد ولی نامزدِ یکتایی نداشت، یا شکلِ اصلاح‌شده.
      */
-    internal fun correctToken(token: String, lexicon: PersianLexicon): String? {
+    internal fun correctToken(
+        token: String,
+        lexicon: PersianLexicon,
+        accept: (String) -> Boolean = lexicon::containsExact,
+    ): String? {
         if (token.length < MIN_LENGTH) return null
         if (!token.any { it in ALTERNATIVES }) return null
-        if (lexicon.contains(token)) return null
+
+        // ── واژه‌ای که خودش در فرهنگ هست ───────────────────────────────────
+        // معمولاً دست‌نخورده می‌ماند. یک استثنا: فهرستِ واژگان از پیکرهٔ زیرنویس
+        // آمده و پُر از توکن‌های کم‌تکراری است که در متنِ کتاب عملاً همیشه خطای
+        // OCR اند — «یول» به‌جای «پول»، «ابن» به‌جای «این». وقتی خودِ توکن
+        // کم‌تکرار است و نامزدش دستِ‌کم [DEMOTE_MIN_GAP] بازه (یعنی ~۱۰۰ برابر)
+        // پرتکرارتر، اصلاح می‌شود.
+        //
+        // قیدِ طول ≥ [MIN_DEMOTE_LENGTH] عمدی است: در دو حرفی «سد» به «شد»
+        // تبدیل می‌شد، و از دست‌دادنِ یک واژهٔ درست بدتر از رهاکردنِ یک خطاست.
+        val tokenBand = lexicon.band(token)
+        val demotable = token.length >= MIN_DEMOTE_LENGTH &&
+            lexicon.containsExact(token) &&
+            tokenBand in 1..DEMOTE_MAX_BAND
+        if (lexicon.contains(token) && !demotable) return null
 
         var found: String? = null
         val chars = token.toCharArray()
@@ -132,7 +168,8 @@ object ConfusionCorrector {
             for (alternative in alternatives) {
                 chars[i] = alternative
                 val candidate = String(chars)
-                if (lexicon.contains(candidate)) {
+                if (demotable && lexicon.band(candidate) - tokenBand < DEMOTE_MIN_GAP) continue
+                if (accept(candidate)) {
                     // نامزدِ دوم یعنی ابهام: با هیچ اطمینانی نمی‌شود یکی را انتخاب کرد.
                     if (found != null && found != candidate) {
                         chars[i] = original
